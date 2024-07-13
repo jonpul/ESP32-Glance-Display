@@ -1,6 +1,8 @@
 # ESP32-Glance-Display
 Arduino C desktop glance display
 
+Note: Edit secrets.h file to add your wifi credentials and service tokens
+
 Targeting Waveshare ESP32-S3 1.28" round touch display. https://www.waveshare.com/esp32-s3-touch-lcd-1.28.htm
 Reference: https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.28
 
