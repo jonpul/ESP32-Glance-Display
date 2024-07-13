@@ -1,7 +1,7 @@
 # ESP32-Glance-Display
 Arduino C desktop glance display
 
-Note: Edit secrets.h file to add your wifi credentials and service tokens
+Important Notes: Edit secrets.h file to add your wifi credentials and service tokens. TFT_eSPI.zip contains the library with the changed User_Setup.h, User_Setup_Select.h and Setup302_Waveshare_ESP32S3_GC9A01.h files for this display.
 
 Targeting Waveshare ESP32-S3 1.28" round touch display. https://www.waveshare.com/esp32-s3-touch-lcd-1.28.htm
 Reference: https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.28
