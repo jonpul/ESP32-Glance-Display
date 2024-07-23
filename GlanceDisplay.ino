@@ -25,6 +25,7 @@ TODO:
 * DONE: Refresh time when the day changes to protect against drift
 * DONE: Delay clock color and mode writes to flash to reduce flash wear as user flips through settings
 * DONE: Auto rotate through pages when idle
+* DONE: stopwatch page. tap to start/stop. tap & hold to clear. shows mins:secs until one hour and then switches to hrs:mins:sec. Max of 99 hrs, 59 min, 59 sec then it just stops. Don't let page change when running.
 * 1. Scripts to manage changing displays for TFT_espi library  
 * 2. Better quotes API with 15 min delayed quotes when market is open
 * 3. next google calendar item on time/date 
@@ -36,9 +37,10 @@ TODO:
 #include <TFT_eSPI.h>     // display 
 #include <WiFi.h>         
 #include <HTTPClient.h>
-#include <Arduino_JSON.h>
-#include <TimeLib.h>
+#include <Arduino_JSON.h> // https://github.com/arduino-libraries/Arduino_JSON
+#include <TimeLib.h> // https://github.com/PaulStoffregen/Time
 #include <Preferences.h>
+#include <TickTwo.h>  // https://github.com/sstaub/TickTwo
 
 Preferences preferences;
 
@@ -83,7 +85,8 @@ enum touchGesture
 //  TIME = 0,
 //  WEATHER = 1,
 //  STOCKS = 2
-const int numPages = 3;
+//  STOPWATCH = 3;
+const int numPages = 4;
 int curPage = 0;
 bool pageJustChanged = false;
 
@@ -94,6 +97,19 @@ int maxColorIndex = (sizeof(timeColors) / sizeof(timeColors[0]))-1;
 int curColorIndex = 0;
 bool time12HrMode = false;
 int lastDayClockRefresh = 0;
+
+// stopwatch globals
+bool stopwatchRunning = false;
+int stopwatchHr = 0;
+int stopwatchMin = 0;
+int stopwatchSec = 0;
+int stopwatchLastSec = 0;
+int stopwatchPrevHr = 0;
+int stopwatchPrevMin = 0;
+int stopwatchPrevSec = 0;
+void onTimer(void); 
+TickTwo secTimer(onTimer, 1000, 0, MILLIS);  
+
 
 // timer values
 #define PAGE_DISPLAY_MILLIS 30000         // how long to display a page
@@ -146,6 +162,14 @@ TFT_eSPI tft = TFT_eSPI(240, 240);
 #define TOUCH_RST 13
 CST816S touch(TOUCH_SDA, TOUCH_SCL, TOUCH_RST, TOUCH_INT);
 
+void onTimer()
+{
+  if(stopwatchRunning)
+  {
+    stopwatchSec++;
+  }  
+}
+
 void setup() {
   #ifdef DEBUG   
     Serial.begin(115200);
@@ -169,13 +193,15 @@ void setup() {
   }
   dumpArrayToDebug();  
 
+  secTimer.start();
+
   touch.begin(); 
       
   // prep the display
   tft.init();
   tft.setRotation(1); 
 
-  // attempt connection with retries and exit if failed
+  //attempt connection with retries and exit if failed
   connectWifi();
   if(!WiFi.isConnected())
   {
@@ -201,7 +227,6 @@ void setup() {
     getTime();
     tft.fillScreen(TFT_BLACK);
   }
-
 }
 
 int startX, startY;
@@ -214,6 +239,8 @@ int lastSymbolID = -1;
 
 void loop() 
 {
+  secTimer.update();  //todo
+
   // leave immediately if no connection
   if(!WiFi.isConnected())
   {
@@ -296,6 +323,25 @@ void loop()
     }
   } // end gesture handling
 
+  if(gestureResult == TAP)
+  {
+    switch(curPage)
+    {
+      case 0: // clock, do nothing on tap
+        break;
+      case 1: // weather, do nothing on tap
+        break;
+      case 2: // stocks, do nothing on tap
+        break;
+      case 3: // stopwatch, toggle running or not
+        stopwatchRunning = !stopwatchRunning;
+        tft.fillScreen(TFT_BLACK);
+        lastPageDisplayMillis = millis(); // reset page display timer so the page doesn't change quickly after we stop the stopwatch
+        break;
+    }
+    gestureResult = NOTOUCH;
+  }
+
   if (gestureResult == LONGTAP) 
   {
     switch(curPage)
@@ -311,12 +357,19 @@ void loop()
         getWeather();
         break;
       case 2: // Stocks
-      // refresh on longtap but limited to more than 2 sec since last refresh (REST calls will take longer anyway, but just for completeness)
-      if (m > (lastQuoteRefreshMillis + 2000))
-      {
-        getQuotes();
-        lastQuoteRefreshMillis = millis(); // reset the refresh timer since we just refreshed      
-      }
+        // refresh on longtap but limited to more than 2 sec since last refresh (REST calls will take longer anyway, but just for completeness)
+        if (m > (lastQuoteRefreshMillis + 2000))
+        {
+          getQuotes();
+          lastQuoteRefreshMillis = millis(); // reset the refresh timer since we just refreshed      
+        }
+      case 3: // Stopwatch
+        // stop the stopwatch if it is running and clear it
+        stopwatchRunning = false;
+        stopwatchHr = 0; 
+        stopwatchMin = 0;
+        stopwatchSec = 0;
+        tft.fillScreen(TFT_BLACK);
     }
     gestureResult = NOTOUCH;
   }
@@ -327,16 +380,18 @@ void loop()
     // what to do for SWIPEUP on each page type
     switch (curPage)
     {
-      case 0: 
+      case 0: // change clock color
         curColorIndex++;
         flashWriteDelayStart = millis();
         break;
-      case 1:
+      case 1: // do nothing for weather
         break;
-      case 2:
+      case 2: // next symbol for stocks
         currentSymbol++;
         lastDisplayMillis = millis();
         lastQuoteRefreshMillis = millis();
+        break;
+      case 3: // do nothing for stopwatch
         break;
     }
     gestureResult = NOTOUCH;
@@ -347,54 +402,62 @@ void loop()
     switch (curPage)
     {
       // what to do for SWIPEDOWN on each page type
-      case 0:
+      case 0: // change clock color
         curColorIndex--;
         flashWriteDelayStart = millis();
        break;
-      case 1:
+      case 1: // do nothing for weather
         break;
-      case 2:
+      case 2: // previous symbol for stocks
         currentSymbol--;
         // we don't want the display to change or the refresh to happen right when the page changes
         // as that ends up at a blank screen for a moment, so just reset the timers for them
         lastDisplayMillis = millis();
         lastQuoteRefreshMillis = millis();
         break;
+      case 3: // do nothing for stopwatch
+        break;
     }
     gestureResult = NOTOUCH;
-    tft.fillScreen(TFT_BLACK);
+    tft.fillScreen(TFT_BLACK);   
   }
   if(gestureResult == SWIPELEFT)
   {
-    // move to next page type   
-    curPage++;
-    lastPageDisplayMillis = millis(); // reset page display timer
-    if(curPage > (numPages-1))
+    // move to next page type (unless stopwatch is running) 
+    if(!stopwatchRunning) 
     {
-      curPage = 0;
+      curPage++;
+      lastPageDisplayMillis = millis(); // reset page display timer
+      if(curPage > (numPages-1))
+      {
+        curPage = 0;
+      }
+      gestureResult = NOTOUCH;
+      pageJustChanged = true;
+      tft.fillScreen(TFT_BLACK);
     }
-    gestureResult = NOTOUCH;
-    pageJustChanged = true;
-    tft.fillScreen(TFT_BLACK);
    }
   if(gestureResult == SWIPERIGHT)
   {
-    // move to prev page type
-    curPage--;
-    lastPageDisplayMillis = millis(); // reset page display timer
-    if(curPage < 0)
+    // move to prev page type (unless on the stopwatch and it is running) 
+    if (!stopwatchRunning)
     {
-      curPage = numPages-1;
+      curPage--;
+      lastPageDisplayMillis = millis(); // reset page display timer
+      if(curPage < 0)
+      {
+        curPage = numPages-1;
+      }
+      gestureResult = NOTOUCH;
+      pageJustChanged = true;
+      tft.fillScreen(TFT_BLACK);
     }
-    gestureResult = NOTOUCH;
-    pageJustChanged = true;
-    tft.fillScreen(TFT_BLACK);
   }
 
   // display the page based on the type
   switch(curPage)
   {
-    case 0:
+    case 0:  // clock
       if(curColorIndex > maxColorIndex)
       {
         curColorIndex = 0;
@@ -406,7 +469,7 @@ void loop()
       displayTime();
       pageJustChanged = false;
       break;
-    case 1:
+    case 1:  // weather
       if(m > (WEATHER_REFRESH_MILLIS + lastWeatherRefreshMillis))
       {
           getWeather();
@@ -415,7 +478,7 @@ void loop()
       displayWeather();
       pageJustChanged = false;
       break;
-    case 2:
+    case 2:  // stocks
       if(pageJustChanged)
       {
         lastQuoteRefreshMillis = millis();
@@ -462,9 +525,12 @@ void loop()
         #endif
       }
       break;
+    case 3: // stopwatch
+      displayStopwatch();
+      break;
   }
-  // check the page timer and increment the page if its time
-  if((m > (lastPageDisplayMillis + PAGE_DISPLAY_MILLIS)))
+  // check the page timer and increment the page if its time (unless stopwatch is running)
+  if((m > (lastPageDisplayMillis + PAGE_DISPLAY_MILLIS)) && ! stopwatchRunning)
   {
     curPage++;
     lastPageDisplayMillis = millis(); // reset page display timer
@@ -1133,3 +1199,92 @@ bool connectWifi(void)
     }
   }
 }
+
+void displayStopwatch()
+{
+  // increment the time
+  if(stopwatchRunning)
+  {
+    if(stopwatchSec > 59)
+    {
+      stopwatchSec = 0;
+      stopwatchMin++;
+    }
+    if(stopwatchMin > 59)
+    {
+      stopwatchMin = 0;
+      stopwatchHr++;
+    }
+    if(stopwatchHr > 99)
+    {
+      stopwatchRunning = false;
+      stopwatchHr = 99;
+    }
+    
+  }
+  // display the numbers
+  tft.setTextColor(TFT_SILVER);
+  tft.drawString("Stopwatch", tft.width()/2, 45,4);
+  tft.setFreeFont(ROBOTOTHIN10);
+  if(stopwatchRunning)
+  {
+    tft.drawString("Tap to stop", tft.width()/2, 63, GFXFF); 
+  }  
+  else
+  {
+    tft.drawString("Tap to start", tft.width()/2, 63, GFXFF); 
+  }
+
+  tft.setTextSize(1); 
+  tft.setTextDatum(MC_DATUM);
+
+  char sCurTime [80];
+
+  // only black out (erase) the parts that have changed to avoid flicker
+  if(stopwatchHr == 0)
+  {
+    // mins:sec - don't force 2 digits for mins  
+    if(stopwatchPrevSec!=stopwatchSec)
+    {
+      tft.fillRect(105,95,90,55,TFT_BLACK);  // rectangle approximating seconds
+      stopwatchPrevSec = stopwatchSec;
+    }    
+    if(stopwatchPrevMin!=stopwatchMin) 
+    {
+      tft.fillRect(40,95,90,55,TFT_BLACK);  // rectangle approximating minutes
+      stopwatchPrevMin = stopwatchMin;
+    }
+    sprintf(sCurTime,"%d:%02d",stopwatchMin, stopwatchSec);
+    tft.setTextColor(timeColors[curColorIndex]); // use same color as clock
+    tft.drawString(sCurTime, (tft.width()/2), 120, 7);
+    //tft.drawRect(105,95,90,55,TFT_RED); // for debugging location
+    //tft.drawRect(40,95,90,55,TFT_WHITE); // for debugging location
+  }
+  else
+  {
+    // hr:mins with secs below - don't force 2 digits for hr
+    // only black out (erase) the parts that have changed to avoid flicker
+    if(stopwatchPrevSec!=stopwatchSec)
+    {
+      tft.fillRect(169,150,27,20,TFT_BLACK);  // rectangle approximating seconds 
+      stopwatchPrevSec = stopwatchSec;
+    }    
+    if(stopwatchPrevMin!=stopwatchMin)
+    {
+      tft.fillRect(105,95,90,55,TFT_BLACK);  // rectangle approximating minutes
+      stopwatchPrevMin = stopwatchMin;
+    }    
+    if(stopwatchPrevHr!=stopwatchHr)
+    {
+      tft.fillRect(40,95,90,55,TFT_BLACK);  // rectangle approximating hours
+      stopwatchPrevHr = stopwatchHr;
+    }
+    sprintf(sCurTime,"%d:%02d",stopwatchHr, stopwatchMin);
+    tft.drawString(sCurTime, (tft.width()/2), 120, 7);
+    tft.setTextFont(4);
+    tft.setCursor(160,150);
+    tft.printf(":%d",stopwatchSec);
+    //tft.drawRect(169,150,27,20,TFT_RED); // for debugging location
+  }
+}
+
