@@ -26,6 +26,7 @@ TODO:
 * DONE: Delay clock color and mode writes to flash to reduce flash wear as user flips through settings
 * DONE: Auto rotate through pages when idle
 * DONE: stopwatch page. tap to start/stop. tap & hold to clear. shows mins:secs until one hour and then switches to hrs:mins:sec. Max of 99 hrs, 59 min, 59 sec then it just stops. Don't let page change when running.
+* MAYBE DONE: Make loss of connectivity after initial start up non-fatal. Just hold on to previous data until next refresh. But try to quietly connect wifi in this case. 
 * 1. Scripts to manage changing displays for TFT_espi library  
 * 2. Better quotes API with 15 min delayed quotes when market is open
 * 3. next google calendar item on time/date 
@@ -108,7 +109,7 @@ int stopwatchPrevHr = 0;
 int stopwatchPrevMin = 0;
 int stopwatchPrevSec = 0;
 void onTimer(void); 
-TickTwo secTimer(onTimer, 1000, 0, MILLIS);  
+TickTwo secTimer(onTimer, 993, 0, MILLIS);  // 1000 ms was running slow over time. After testing a range of values, this was most accurate
 
 
 // timer values
@@ -191,7 +192,7 @@ void setup() {
     quotes[i].dayhigh = -1.0f;
     quotes[i].daylow = -1.0f;
   }
-  dumpArrayToDebug();  
+  //dumpArrayToDebug();  
 
   secTimer.start();
 
@@ -202,7 +203,7 @@ void setup() {
   tft.setRotation(1); 
 
   //attempt connection with retries and exit if failed
-  connectWifi();
+  connectWifi(false);
   if(!WiFi.isConnected())
   {
     tft.fillScreen(TFT_RED);
@@ -214,17 +215,17 @@ void setup() {
     tft.fillScreen(TFT_BLACK);
     // initialize quotes 
     tft.drawString("Getting quotes...", tft.width()/2, 70,4);
-    getQuotes();
+    getQuotes(true);
     tft.fillScreen(TFT_BLACK);
 
     // get weather
     tft.drawString("Getting weather...", tft.width()/2, 70,4);
-    getWeather();
+    getWeather(true);
     tft.fillScreen(TFT_BLACK);
 
     // get time
     tft.drawString("Getting time...", tft.width()/2, 70,4);
-    getTime();
+    getTime(true);
     tft.fillScreen(TFT_BLACK);
   }
 }
@@ -354,15 +355,16 @@ void loop()
         break; 
       case 1: // Weather
         // get latest weather
-        getWeather();
+        getWeather(false);
         break;
       case 2: // Stocks
         // refresh on longtap but limited to more than 2 sec since last refresh (REST calls will take longer anyway, but just for completeness)
         if (m > (lastQuoteRefreshMillis + 2000))
         {
-          getQuotes();
+          getQuotes(false);
           lastQuoteRefreshMillis = millis(); // reset the refresh timer since we just refreshed      
         }
+        break;
       case 3: // Stopwatch
         // stop the stopwatch if it is running and clear it
         stopwatchRunning = false;
@@ -395,7 +397,7 @@ void loop()
         break;
     }
     gestureResult = NOTOUCH;
-    tft.fillScreen(TFT_BLACK);
+    tft.fillScreen(TFT_BLACK); 
   }
   if(gestureResult == SWIPEDOWN)
   {
@@ -419,7 +421,7 @@ void loop()
         break;
     }
     gestureResult = NOTOUCH;
-    tft.fillScreen(TFT_BLACK);   
+    tft.fillScreen(TFT_BLACK);    
   }
   if(gestureResult == SWIPELEFT)
   {
@@ -434,7 +436,7 @@ void loop()
       }
       gestureResult = NOTOUCH;
       pageJustChanged = true;
-      tft.fillScreen(TFT_BLACK);
+      tft.fillScreen(TFT_BLACK); 
     }
    }
   if(gestureResult == SWIPERIGHT)
@@ -450,7 +452,7 @@ void loop()
       }
       gestureResult = NOTOUCH;
       pageJustChanged = true;
-      tft.fillScreen(TFT_BLACK);
+      tft.fillScreen(TFT_BLACK); 
     }
   }
 
@@ -472,7 +474,7 @@ void loop()
     case 1:  // weather
       if(m > (WEATHER_REFRESH_MILLIS + lastWeatherRefreshMillis))
       {
-          getWeather();
+          getWeather(false);
           lastWeatherRefreshMillis = millis();
       }
       displayWeather();
@@ -505,7 +507,7 @@ void loop()
       if(m > (QUOTE_DISPLAY_MILLIS + lastDisplayMillis))
       {
         currentSymbol++;  // next stock
-        tft.fillScreen(TFT_BLACK);
+        tft.fillScreen(TFT_BLACK);   // TODO possible screen blanking on refresh bug
         lastDisplayMillis = millis();
       }
 
@@ -514,7 +516,7 @@ void loop()
       {
         if((m > (QUOTE_REFRESH_MILLIS + lastQuoteRefreshMillis)) && !pageJustChanged)
         {
-          getQuotes();
+          getQuotes(false);
           lastQuoteRefreshMillis = millis();
         }
       }  
@@ -554,24 +556,45 @@ void dumpArrayToDebug()
     }
    #endif
 }
-void getQuotes()
-{  
+void getQuotes(bool firstRun)
+{ 
+  #ifdef DEBUG
+    if(firstRun)
+    {
+      Serial.println("STARTUP: getting quotes");
+    }
+    else
+    {
+      Serial.println("NON-STARTUP: getting quotes");
+    }
+  #endif
+ 
   String payload =  "";
   JSONVar jsonObj = null;
 
-  tft.fillCircle(200,200,5,TFT_BLUE); // draw refresh indicator dot
-  for(int i=0; i<= maxSymbolIndex; i++)
+  if(WiFi.isConnected())
   {
-    payload = getQuote(quotes[i].symbol);
-    // Parse response
-    jsonObj = JSON.parse(payload);
-    // Read values
-    quotes[i].price = jsonObj["c"]; // price
-    quotes[i].change = jsonObj["d"]; // $ change
-    quotes[i].dayhigh = jsonObj["h"]; // $ day high
-    quotes[i].daylow = jsonObj["l"]; // $ day low
+    tft.fillCircle(200,200,5,TFT_BLUE); // draw refresh indicator dot
+    for(int i=0; i<= maxSymbolIndex; i++)
+    {
+      payload = getQuote(quotes[i].symbol);
+      // Parse response
+      jsonObj = JSON.parse(payload);
+      // Read values
+      quotes[i].price = jsonObj["c"]; // price
+      quotes[i].change = jsonObj["d"]; // $ change
+      quotes[i].dayhigh = jsonObj["h"]; // $ day high
+      quotes[i].daylow = jsonObj["l"]; // $ day low
+    }
+    #ifdef DEBUG
+      Serial.println("Stocks refreshed");
+    #endif
+    //dumpArrayToDebug();
   }
-  dumpArrayToDebug();
+  else if(!firstRun)
+  {
+    connectWifi(true);
+  }
 }
 
 String getQuote(String symbol)
@@ -716,101 +739,124 @@ void displayQuote (char* symbol, float price, float change, float dayhigh, float
   tft.printf("%0.2f",daylow);
 }
 
-void getWeather(void)
+void getWeather(bool firstRun)
 {  
+  #ifdef DEBUG
+    if(firstRun)
+    {
+      Serial.println("STARTUP: getting weather");
+    }
+    else
+    {
+      Serial.println("NON-STARTUP: getting weather");
+    }
+  #endif
+
   JSONVar jsonObj = null;
 
-  // Initialize the HTTPClient object
-  HTTPClient http;
-  tft.fillCircle(200,200,5,TFT_BLUE); // draw refresh indicator dot
+  if(WiFi.isConnected())
+  {
+    // Initialize the HTTPClient object
+    HTTPClient http;
+    tft.fillCircle(200,200,5,TFT_BLUE); // draw refresh indicator dot
+    
+    // Construct the URL using token from secrets.h  
+    //this is weatherapi.com one day forecast request, which also returns location and current conditions
+    // use zipcode if there is one, otherwise use public IP location 
+    String url = "";
+    if((String)(WEATHER_ZIP)!="")
+    {
+      url = "http://api.weatherapi.com/v1/forecast.json?key="+(String)WEATHER_TOKEN+"&q="+(String)WEATHER_ZIP+"&aqi=no&days=1";
+    }  
+    else
+    {
+      url = "http://api.weatherapi.com/v1/forecast.json?key="+(String)WEATHER_TOKEN+"&q=auto:ip&aqi=no&days=1";
+    }
+    // Make the HTTP GET request 
+    http.begin(url);
+    int httpCode = http.GET();
+
+    String payload = "";
+    // Check the return code
+    if (httpCode == HTTP_CODE_OK) {
+      // If the server responds with 200, return the payload
+      payload = http.getString();
+    } else if (httpCode == HTTP_CODE_UNAUTHORIZED) {
+      // If the server responds with 401, print an error message
+      #ifdef DEBUG
+        Serial.println(F("Weather API Key error."));
+        Serial.println(String(http.getString()));
+      #endif
+      tft.fillScreen(TFT_RED);
+      tft.setTextSize(1); 
+      tft.setTextColor(TFT_WHITE);
+      tft.drawString("Weather Token Error", tft.width()/2, 100,4);
+      delay(1000);
+      tft.fillScreen(TFT_BLACK);
+    } else {
+      // For any other HTTP response code, print it
+      #ifdef DEBUG
+        Serial.println(F("Received unexpected HTTP response:"));
+        Serial.println(httpCode);
+      #endif
+      tft.fillScreen(TFT_RED);
+      tft.setTextSize(1); 
+      tft.setTextColor(TFT_WHITE);
+      tft.drawString("Weather Service Error", tft.width()/2, 100,4);
+      delay(1000);
+      tft.fillScreen(TFT_BLACK);
+    }
+    // End the HTTP connection
+    http.end();
   
-  // Construct the URL using token from secrets.h  
-  //this is weatherapi.com one day forecast request, which also returns location and current conditions
-  // use zipcode if there is one, otherwise use public IP location 
-  String url = "";
-  if((String)(WEATHER_ZIP)!="")
-  {
-    url = "http://api.weatherapi.com/v1/forecast.json?key="+(String)WEATHER_TOKEN+"&q="+(String)WEATHER_ZIP+"&aqi=no&days=1";
-  }  
-  else
-  {
-    url = "http://api.weatherapi.com/v1/forecast.json?key="+(String)WEATHER_TOKEN+"&q=auto:ip&aqi=no&days=1";
-  }
-  // Make the HTTP GET request 
-  http.begin(url);
-  int httpCode = http.GET();
+    // Parse response
+    jsonObj = JSON.parse(payload);
+    // Read values
+    const char* city = jsonObj["location"]["name"];
+    strcpy(myWeather.city, city);
 
-  String payload = "";
-  // Check the return code
-  if (httpCode == HTTP_CODE_OK) {
-    // If the server responds with 200, return the payload
-    payload = http.getString();
-  } else if (httpCode == HTTP_CODE_UNAUTHORIZED) {
-    // If the server responds with 401, print an error message
-    #ifdef DEBUG
-      Serial.println(F("Weather API Key error."));
-      Serial.println(String(http.getString()));
-    #endif
-    tft.fillScreen(TFT_RED);
-    tft.setTextSize(1); 
-    tft.setTextColor(TFT_WHITE);
-    tft.drawString("Weather Token Error", tft.width()/2, 100,4);
-    delay(1000);
+    const char* state = jsonObj["location"]["region"];
+    strcpy(myWeather.state, state);
+
+    myWeather.curTemp = (int)jsonObj["current"]["temp_f"];
+
+    myWeather.curHumidity = (int)jsonObj["current"]["humidity"];        
+
+    const char* conditions = jsonObj["current"]["condition"]["text"];
+    strcpy(myWeather.conditions, conditions);
+
+    int todayLow  = jsonObj["forecast"]["forecastday"][0]["day"]["mintemp_f"]; // the zero-eth forecast day is today (and we're only getting one day of forecast)
+    myWeather.todayLow = todayLow;
+
+    int todayHigh  = jsonObj["forecast"]["forecastday"][0]["day"]["maxtemp_f"]; // the zero-eth forecast day is today (and we're only getting one day of forecast
+    myWeather.todayHigh = todayHigh;
+
+    int wind_spd = jsonObj["current"]["wind_mph"];
+    myWeather.wind_spd = wind_spd;
+
+    const char* wind_dir = jsonObj["current"]["wind_dir"];
+    // copy wind direction to the struct and make it lowercase
+    strcpy(myWeather.wind_dir, wind_dir);
+    int len = strlen(myWeather.wind_dir);
+    for (int i = 0; i < len; i++) 
+    {
+        myWeather.wind_dir[i] = tolower(myWeather.wind_dir[i]);
+    }
+    // sync local time from the server while we're at it
+    const char* localTime = jsonObj["location"]["localtime"];
+    parseTime(localTime);
+
     tft.fillScreen(TFT_BLACK);
-  } else {
-    // For any other HTTP response code, print it
     #ifdef DEBUG
-      Serial.println(F("Received unexpected HTTP response:"));
-      Serial.println(httpCode);
+      Serial.println("Weather refreshed");
     #endif
-    tft.fillScreen(TFT_RED);
-    tft.setTextSize(1); 
-    tft.setTextColor(TFT_WHITE);
-    tft.drawString("Weather Service Error", tft.width()/2, 100,4);
-    delay(1000);
-    tft.fillScreen(TFT_BLACK);
+
   }
-  // End the HTTP connection
-  http.end();
- 
-  // Parse response
-  jsonObj = JSON.parse(payload);
-  // Read values
-  const char* city = jsonObj["location"]["name"];
-  strcpy(myWeather.city, city);
-
-  const char* state = jsonObj["location"]["region"];
-  strcpy(myWeather.state, state);
-
-  myWeather.curTemp = (int)jsonObj["current"]["temp_f"];
-
-  myWeather.curHumidity = (int)jsonObj["current"]["humidity"];        
-
-  const char* conditions = jsonObj["current"]["condition"]["text"];
-  strcpy(myWeather.conditions, conditions);
-
-  int todayLow  = jsonObj["forecast"]["forecastday"][0]["day"]["mintemp_f"]; // the zero-eth forecast day is today (and we're only getting one day of forecast)
-  myWeather.todayLow = todayLow;
-
-  int todayHigh  = jsonObj["forecast"]["forecastday"][0]["day"]["maxtemp_f"]; // the zero-eth forecast day is today (and we're only getting one day of forecast
-  myWeather.todayHigh = todayHigh;
-
-  int wind_spd = jsonObj["current"]["wind_mph"];
-  myWeather.wind_spd = wind_spd;
-
-  const char* wind_dir = jsonObj["current"]["wind_dir"];
-  // copy wind direction to the struct and make it lowercase
-  strcpy(myWeather.wind_dir, wind_dir);
-  int len = strlen(myWeather.wind_dir);
-  for (int i = 0; i < len; i++) 
+  else if(!firstRun)
   {
-      myWeather.wind_dir[i] = tolower(myWeather.wind_dir[i]);
+    connectWifi(true);
   }
-  // sync local time from the server while we're at it
-  const char* localTime = jsonObj["location"]["localtime"];
-  parseTime(localTime);
 
-  tft.fillScreen(TFT_BLACK);
 }
 
 void displayWeather()
@@ -1072,74 +1118,105 @@ void displayTime(void)
   // see if we need to refresh the time
   if(lastDayClockRefresh!=day())
   {
-    getTime();
+    getTime(false);
   }
 }
 
-void getTime(void)
+void getTime(bool firstRun)
 {
-  JSONVar jsonObj = null;
+  #ifdef DEBUG
+    if(firstRun)
+    {
+      Serial.println("STARTUP: getting time");
+    }
+    else
+    {
+      Serial.println("NON-STARTUP: getting time");
+    }
+  #endif
+  if(WiFi.isConnected())
+  {
+    JSONVar jsonObj = null;
 
-  // Initialize the HTTPClient object
-  HTTPClient http;
-  tft.fillCircle(200,200,5,TFT_BLUE); // draw refresh indicator dot
+    // Initialize the HTTPClient object
+    HTTPClient http;
+    tft.fillCircle(200,200,5,TFT_BLUE); // draw refresh indicator dot
+    
+    // Construct the URL using token from secrets.h  
+    //this is WorldTimeAPI.org time request for current public IP
+    String url = "https://worldtimeapi.org/api/ip";
+    // Make the HTTP GET request 
+    http.begin(url);
+    int httpCode = http.GET();
+
+    String payload = "";
+    // Check the return code
+    if (httpCode == HTTP_CODE_OK) {
+      // If the server responds with 200, return the payload
+      payload = http.getString();
+    } else if (httpCode == HTTP_CODE_UNAUTHORIZED) {
+      // If the server responds with 401, print an error message
+      #ifdef DEBUG
+        Serial.println(F("Time API Key error."));
+        Serial.println(String(http.getString()));
+      #endif
+      tft.fillScreen(TFT_RED);
+      tft.setTextSize(1); 
+      tft.setTextColor(TFT_WHITE);
+      tft.drawString("Time Token Error", tft.width()/2, 100,4);
+      delay(1000);
+      tft.fillScreen(TFT_BLACK);
+    } else {
+      // For any other HTTP response code, print it
+      #ifdef DEBUG
+        Serial.println(F("Received unexpected HTTP response:"));
+        Serial.println(httpCode);
+      #endif
+      tft.fillScreen(TFT_RED);
+      tft.setTextSize(1); 
+      tft.setTextColor(TFT_WHITE);
+      tft.drawString("Time Service Error", tft.width()/2, 100,4);
+      delay(1000);
+      tft.fillScreen(TFT_BLACK);
+    }
+    // End the HTTP connection
+    http.end();
   
-  // Construct the URL using token from secrets.h  
-  //this is WorldTimeAPI.org time request for current public IP
-  String url = "https://worldtimeapi.org/api/ip";
-  // Make the HTTP GET request 
-  http.begin(url);
-  int httpCode = http.GET();
-
-  String payload = "";
-  // Check the return code
-  if (httpCode == HTTP_CODE_OK) {
-    // If the server responds with 200, return the payload
-    payload = http.getString();
-  } else if (httpCode == HTTP_CODE_UNAUTHORIZED) {
-    // If the server responds with 401, print an error message
-    #ifdef DEBUG
-      Serial.println(F("Time API Key error."));
-      Serial.println(String(http.getString()));
-    #endif
-    tft.fillScreen(TFT_RED);
-    tft.setTextSize(1); 
-    tft.setTextColor(TFT_WHITE);
-    tft.drawString("Time Token Error", tft.width()/2, 100,4);
-    delay(1000);
+    // Parse response
+    jsonObj = JSON.parse(payload);
+    // Read values
+    
+    // get local time 
+    const char* localTime = jsonObj["datetime"];
+    parseTime(localTime);
     tft.fillScreen(TFT_BLACK);
-  } else {
-    // For any other HTTP response code, print it
     #ifdef DEBUG
-      Serial.println(F("Received unexpected HTTP response:"));
-      Serial.println(httpCode);
+      Serial.println("Time refreshed");
     #endif
-    tft.fillScreen(TFT_RED);
-    tft.setTextSize(1); 
-    tft.setTextColor(TFT_WHITE);
-    tft.drawString("Time Service Error", tft.width()/2, 100,4);
-    delay(1000);
-    tft.fillScreen(TFT_BLACK);
   }
-  // End the HTTP connection
-  http.end();
- 
-  // Parse response
-  jsonObj = JSON.parse(payload);
-  // Read values
-  
-  // get local time 
-  const char* localTime = jsonObj["datetime"];
-  parseTime(localTime);
-  tft.fillScreen(TFT_BLACK);
+  else if(!firstRun)
+  {
+    connectWifi(true);
+  }
 }
 
 double mapFloat (double x, double in_min, double in_max, double out_min, double out_max) {
     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
-bool connectWifi(void)
+// quietMode = true will try to connect but won't show any messages. 
+bool connectWifi(bool quietMode)
 {
+  #ifdef DEBUG
+    if(quietMode)
+    {
+      Serial.println("connecting wifi in quiet mode");
+    }
+    else
+    {
+      Serial.println("connecting wifi in non-quiet mode");
+    }
+  #endif
   const int numRetries =5;
   int retryCount = 0;
   tft.fillScreen(TFT_BLACK);
@@ -1147,7 +1224,7 @@ bool connectWifi(void)
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(TFT_WHITE);
   // Check if the secrets have been set
-  if (String(SSID) == "YOUR_SSID" || String(SSID_PASSWORD) == "YOUR_SSID_PASSWORD") {
+  if (!quietMode && String(SSID) == "YOUR_SSID" || String(SSID_PASSWORD) == "YOUR_SSID_PASSWORD") {
     tft.drawString("Missing secrets!", tft.width()/2, 70,4);
     #ifdef DEBUG
       Serial.println(F("Please update the secrets.h file with your credentials before running the sketch."));
@@ -1162,14 +1239,20 @@ bool connectWifi(void)
   while (!WiFi.isConnected() && (retryCount <= numRetries)) 
   {
     delay(1500);
-    tft.fillScreen(TFT_BLACK);
-    tft.drawString("Connecting WiFi...", tft.width()/2, 70,4);
+    if(!quietMode)
+    {
+      tft.fillScreen(TFT_BLACK);
+      tft.drawString("Connecting WiFi...", tft.width()/2, 70,4);
+    }
     retryCount++;
   }
   if(WiFi.isConnected())
   {
-    tft.drawString("Connected!", tft.width()/2, 100,4);
-    delay(500);
+    if(!quietMode)
+    {
+      tft.drawString("Connected!", tft.width()/2, 100,4);
+      delay(500);
+    }
     return(true);
   }
   else if (String(BACKUP_SSID)!="")  // try the backup if there is one
@@ -1181,15 +1264,21 @@ bool connectWifi(void)
     while (!WiFi.isConnected() && (retryCount <= numRetries)) 
     {
       delay(1500);
-      tft.fillScreen(TFT_BLACK);
-      tft.drawString("Backup WiFi...", tft.width()/2, 70,4);
+      if(!quietMode)
+      {
+        tft.fillScreen(TFT_BLACK);
+        tft.drawString("Backup WiFi...", tft.width()/2, 70,4);
+      }
       retryCount++;
     }
     Serial.println(WiFi.isConnected());
     if(WiFi.isConnected())
     {
-      tft.drawString("Connected!", tft.width()/2, 100,4);
-      delay(500);
+      if(!quietMode)
+      {
+        tft.drawString("Connected!", tft.width()/2, 100,4);
+        delay(500);
+      }
       Serial.println("****Connected to backup wifi****");
       return(true);
     }
@@ -1266,7 +1355,7 @@ void displayStopwatch()
     // only black out (erase) the parts that have changed to avoid flicker
     if(stopwatchPrevSec!=stopwatchSec)
     {
-      tft.fillRect(169,150,27,20,TFT_BLACK);  // rectangle approximating seconds 
+      tft.fillRect(165,150,32,20,TFT_BLACK);  // rectangle approximating seconds 
       stopwatchPrevSec = stopwatchSec;
     }    
     if(stopwatchPrevMin!=stopwatchMin)
