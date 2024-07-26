@@ -26,7 +26,8 @@ TODO:
 * DONE: Delay clock color and mode writes to flash to reduce flash wear as user flips through settings
 * DONE: Auto rotate through pages when idle
 * DONE: stopwatch page. tap to start/stop. tap & hold to clear. shows mins:secs until one hour and then switches to hrs:mins:sec. Max of 99 hrs, 59 min, 59 sec then it just stops. Don't let page change when running.
-* MAYBE DONE: Make loss of connectivity after initial start up non-fatal. Just hold on to previous data until next refresh. But try to quietly connect wifi in this case. 
+* DONE: stocks not autorefreshing on interval
+* DONE (I think): Make loss of connectivity after initial start up non-fatal. Just hold on to previous data until next refresh. But try to quietly connect wifi in this case. 
 * 1. Scripts to manage changing displays for TFT_espi library  
 * 2. Better quotes API with 15 min delayed quotes when market is open
 * 3. next google calendar item on time/date 
@@ -64,7 +65,8 @@ Preferences preferences;
 #define ROBOTO24 &Roboto_24
 #define ROBOTO22 &Roboto_22
 
-#define DEBUG
+#define DEBUG   // verbose serial debug output
+//#define MEMCHECK   // serial memory stats output 
 
 // gesture thresholds
 #define MILLIS_LONGPRESS 500      // how long makes a tap into a tap and hold?
@@ -116,13 +118,13 @@ TickTwo secTimer(onTimer, 993, 0, MILLIS);  // 1000 ms was running slow over tim
 #define PAGE_DISPLAY_MILLIS 30000         // how long to display a page
 int lastPageDisplayMillis = millis();     // initialize page pause timer
 #define QUOTE_DISPLAY_MILLIS 5000         // how long to display a quote
-#define QUOTE_REFRESH_MILLIS 60000        // interval for refreshing quotes
-#define WEATHER_REFRESH_MILLIS 960000     // interval for refreshing weather
+#define QUOTE_REFRESH_MILLIS 1080000        // interval for refreshing quotes 
+#define WEATHER_REFRESH_MILLIS 1800000     // interval for refreshing weather
 // delay writing prefs to flash until they haven't changed for the defined interval
 int flashWriteDelayStart = -1;            // if it is -1 that means it hasn't changed
 #define FLASH_WRITE_DELAY_MS 5000         // wait this ms after setting changes to write to flash (to reduce flash wear)
-//#define QUOTE_REFRESH_MILLIS 0          // interval for refreshing quotes -1 = no auto refresh
-int lastQuoteRefreshMillis = millis();    // initialize quote refresh timer
+//#define QUOTE_REFRESH_MILLIS -1          // interval for refreshing quotes -1 = no auto refresh
+unsigned long int lastQuoteRefreshMillis = millis();    // initialize quote refresh timer
 int lastDisplayMillis = millis();         // initialize display pause timer       
 int lastWeatherRefreshMillis = millis();  // initialize weather refresh timer
 
@@ -240,17 +242,19 @@ int lastSymbolID = -1;
 
 void loop() 
 {
-  secTimer.update();  //todo
+  secTimer.update();  
 
   // leave immediately if no connection
-  if(!WiFi.isConnected())
-  {
-    Serial.println(WiFi.isConnected());
-    Serial.println("restarting");
-    delay(2000);
-    esp_restart();
-  }
-  int m = millis();
+  ///////////////////////////////////
+  // TODO this needs to change (go away completely?) for the connection resilency stuff in refresh to work at all 
+  // if(!WiFi.isConnected())
+  // {
+  //   Serial.println("WiFi lost...restarting");
+  //   delay(2000);
+  //   esp_restart();
+  // }
+  ///////////////////////////////////
+  unsigned long int m = millis();
     if(touch.available())
   {
     if(touch.data.points == 1) // only one finger
@@ -335,6 +339,10 @@ void loop()
       case 2: // stocks, do nothing on tap
         break;
       case 3: // stopwatch, toggle running or not
+        #ifdef DEBUG
+          if(!stopwatchRunning) Serial.printf("Stopwatch start %02d:%02d:%02d\n",hour(),minute(),second());
+          if(stopwatchRunning) Serial.printf("Stopwatch stop %02d:%02d:%02d\n",hour(),minute(),second());
+        #endif
         stopwatchRunning = !stopwatchRunning;
         tft.fillScreen(TFT_BLACK);
         lastPageDisplayMillis = millis(); // reset page display timer so the page doesn't change quickly after we stop the stopwatch
@@ -355,14 +363,15 @@ void loop()
         break; 
       case 1: // Weather
         // get latest weather
-        getWeather(false);
+        getWeather(true);   // show any errors on manual refresh
         break;
       case 2: // Stocks
         // refresh on longtap but limited to more than 2 sec since last refresh (REST calls will take longer anyway, but just for completeness)
         if (m > (lastQuoteRefreshMillis + 2000))
         {
-          getQuotes(false);
+          getQuotes(true);   // show any errors on manual refresh
           lastQuoteRefreshMillis = millis(); // reset the refresh timer since we just refreshed      
+          //Serial.printf("lastQuoteRefreshMillis:%d  QUOTE_REFRESH_MILLIS:%d   millis:%d\n",lastQuoteRefreshMillis,QUOTE_REFRESH_MILLIS,millis());
         }
         break;
       case 3: // Stopwatch
@@ -391,7 +400,7 @@ void loop()
       case 2: // next symbol for stocks
         currentSymbol++;
         lastDisplayMillis = millis();
-        lastQuoteRefreshMillis = millis();
+        //lastQuoteRefreshMillis = millis();
         break;
       case 3: // do nothing for stopwatch
         break;
@@ -415,7 +424,7 @@ void loop()
         // we don't want the display to change or the refresh to happen right when the page changes
         // as that ends up at a blank screen for a moment, so just reset the timers for them
         lastDisplayMillis = millis();
-        lastQuoteRefreshMillis = millis();
+        //lastQuoteRefreshMillis = millis();
         break;
       case 3: // do nothing for stopwatch
         break;
@@ -483,7 +492,7 @@ void loop()
     case 2:  // stocks
       if(pageJustChanged)
       {
-        lastQuoteRefreshMillis = millis();
+        //lastQuoteRefreshMillis = millis();
       }
       if(currentSymbol > maxSymbolIndex)
       {
@@ -507,14 +516,14 @@ void loop()
       if(m > (QUOTE_DISPLAY_MILLIS + lastDisplayMillis))
       {
         currentSymbol++;  // next stock
-        tft.fillScreen(TFT_BLACK);   // TODO possible screen blanking on refresh bug
+        tft.fillScreen(TFT_BLACK);   
         lastDisplayMillis = millis();
       }
 
       // check if we need to refresh quotes ONLY when showing stock page. Set QUOTE_REFRESH_MILLIS to -1 to turn off timed refresh
       if(QUOTE_REFRESH_MILLIS > 0)
       {
-        if((m > (QUOTE_REFRESH_MILLIS + lastQuoteRefreshMillis)) && !pageJustChanged)
+        if((m > (QUOTE_REFRESH_MILLIS + lastQuoteRefreshMillis)))
         {
           getQuotes(false);
           lastQuoteRefreshMillis = millis();
@@ -544,7 +553,27 @@ void loop()
     pageJustChanged = true;
     tft.fillScreen(TFT_BLACK);
   }  
-}
+  if(!stopwatchRunning)
+  {
+    if(QUOTE_REFRESH_MILLIS > 0)
+    {
+      if((m > (QUOTE_REFRESH_MILLIS + lastQuoteRefreshMillis)) )
+      {
+        getQuotes(false);
+        lastQuoteRefreshMillis = millis();
+      }
+    }  
+    else
+    {
+      #ifdef DEBUG
+        Serial.println("Timed refresh is off");
+      #endif
+    }
+  }
+  // #ifdef MEMCHECK
+  //   Serial.println(esp_get_free_heap_size());
+  // #endif
+} // end of loop()
 
 void dumpArrayToDebug()
 {
@@ -558,6 +587,10 @@ void dumpArrayToDebug()
 }
 void getQuotes(bool firstRun)
 { 
+  #ifdef MEMCHECK
+     Serial.printf("Start getQuotes: %d\n",esp_get_free_heap_size());
+  #endif
+
   #ifdef DEBUG
     if(firstRun)
     {
@@ -577,14 +610,17 @@ void getQuotes(bool firstRun)
     tft.fillCircle(200,200,5,TFT_BLUE); // draw refresh indicator dot
     for(int i=0; i<= maxSymbolIndex; i++)
     {
-      payload = getQuote(quotes[i].symbol);
+      payload = getQuote(quotes[i].symbol,true);
       // Parse response
-      jsonObj = JSON.parse(payload);
-      // Read values
-      quotes[i].price = jsonObj["c"]; // price
-      quotes[i].change = jsonObj["d"]; // $ change
-      quotes[i].dayhigh = jsonObj["h"]; // $ day high
-      quotes[i].daylow = jsonObj["l"]; // $ day low
+      if(payload!="")
+      {
+        jsonObj = JSON.parse(payload);
+        // Read values
+        quotes[i].price = jsonObj["c"]; // price
+        quotes[i].change = jsonObj["d"]; // $ change
+        quotes[i].dayhigh = jsonObj["h"]; // $ day high
+        quotes[i].daylow = jsonObj["l"]; // $ day low
+      }
     }
     #ifdef DEBUG
       Serial.println("Stocks refreshed");
@@ -595,10 +631,19 @@ void getQuotes(bool firstRun)
   {
     connectWifi(true);
   }
+  tft.fillCircle(200,200,5,TFT_BLACK); // erase refresh indicator dot
+  #ifdef MEMCHECK
+     Serial.printf("End getQuotes: %d\n",esp_get_free_heap_size());
+  #endif
+
 }
 
-String getQuote(String symbol)
+String getQuote(String symbol, bool quietMode)
 {
+  #ifdef MEMCHECK
+     Serial.printf("Start getQuote: %d\n",esp_get_free_heap_size());
+  #endif
+
   // Initialize the HTTPClient object
   HTTPClient http;
   
@@ -620,11 +665,14 @@ String getQuote(String symbol)
       Serial.println(F("Invalid email or API key."));
       Serial.println(String(http.getString()));
     #endif
-    tft.fillScreen(TFT_RED);
-    tft.setTextSize(1); 
-    tft.setTextColor(TFT_WHITE);
-    tft.drawString("Quote Service Token Error", tft.width()/2, 100,4);
-    delay(1000);
+    if(!quietMode)
+    {
+      tft.fillScreen(TFT_RED);
+      tft.setTextSize(1); 
+      tft.setTextColor(TFT_WHITE);
+      tft.drawString("Quote Service Token Error", tft.width()/2, 100,4);
+      delay(1000);
+    }
     return "";
   } else {
     // For any other HTTP response code, print it
@@ -632,21 +680,32 @@ String getQuote(String symbol)
       Serial.println(F("Received unexpected HTTP response:"));
       Serial.println(httpCode);
     #endif
-    tft.fillScreen(TFT_RED);
-    tft.setTextSize(1); 
-    tft.setTextColor(TFT_WHITE);
-    tft.drawString("Quote Service Error", tft.width()/2, 100,4);
-    delay(1000);
+    if(!quietMode)
+    {
+      tft.fillScreen(TFT_RED);
+      tft.setTextSize(1); 
+      tft.setTextColor(TFT_WHITE);
+      tft.drawString("Quote Service Error", tft.width()/2, 100,4);
+      delay(1000);
+    }
     return "";
   }
   // End the HTTP connection
   http.end();
+
+  #ifdef MEMCHECK
+     Serial.printf("End getQuote: %d\n",esp_get_free_heap_size());
+  #endif
   
   return payload;
 }
 
 void displayQuote (char* symbol, float price, float change, float dayhigh, float daylow)
 {
+  #ifdef MEMCHECK
+     Serial.printf("Start displayQuote: %d\n",esp_get_free_heap_size());
+  #endif
+
   static uint32_t count = 0;
   uint16_t fg_color = 0x39E8;  // dark grey 
   uint16_t bg_color = TFT_BLACK;       // This is the background colour used for smoothing (anti-aliasing)
@@ -737,6 +796,9 @@ void displayQuote (char* symbol, float price, float change, float dayhigh, float
   tft.printf("%0.2f",dayhigh);
   tft.setCursor(73,220);
   tft.printf("%0.2f",daylow);
+  #ifdef MEMCHECK
+     Serial.printf("End displayQuote: %d\n",esp_get_free_heap_size());
+  #endif
 }
 
 void getWeather(bool firstRun)
@@ -856,6 +918,7 @@ void getWeather(bool firstRun)
   {
     connectWifi(true);
   }
+  tft.fillCircle(200,200,5,TFT_BLACK); // erase refresh indicator dot
 
 }
 
@@ -1198,6 +1261,8 @@ void getTime(bool firstRun)
   {
     connectWifi(true);
   }
+    tft.fillCircle(200,200,5,TFT_BLACK); // erase refresh indicator dot
+
 }
 
 double mapFloat (double x, double in_min, double in_max, double out_min, double out_max) {
@@ -1271,7 +1336,6 @@ bool connectWifi(bool quietMode)
       }
       retryCount++;
     }
-    Serial.println(WiFi.isConnected());
     if(WiFi.isConnected())
     {
       if(!quietMode)
