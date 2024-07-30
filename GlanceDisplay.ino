@@ -16,7 +16,7 @@ TODO:
 * DONE: color range for temp
 * DONE: Time page: long press to toggle 12/24 hr time with am/pm indicator
 * DONE: Time page: 3 letter month name
-* DONE Get time from worldtimeapi.org rather than weather page
+* DONE: Get time from worldtimeapi.org rather than weather page
 * DONE: Auto update weather - every 16 mins seems good. 
 * DONE: more colors for clock (red, silver, sky blue, green, yellow, orange)
 * DONE: fallback wifi. Try main wifi 3 times, then fallback wifi 3 times, then back to main, etc. 
@@ -26,8 +26,9 @@ TODO:
 * DONE: Delay clock color and mode writes to flash to reduce flash wear as user flips through settings
 * DONE: Auto rotate through pages when idle
 * DONE: stopwatch page. tap to start/stop. tap & hold to clear. shows mins:secs until one hour and then switches to hrs:mins:sec. Max of 99 hrs, 59 min, 59 sec then it just stops. Don't let page change when running.
-* DONE: stocks not autorefreshing on interval
+* DONE: BUG: stocks not autorefreshing on interval
 * DONE (I think): Make loss of connectivity after initial start up non-fatal. Just hold on to previous data until next refresh. But try to quietly connect wifi in this case. 
+* DONE: BUG: removed leftover time sync from the weather feed when weather would refresh, I know this time is not accurate and this is probably the root cause of the time drift. 
 * 1. Scripts to manage changing displays for TFT_espi library  
 * 2. Better quotes API with 15 min delayed quotes when market is open
 * 3. next google calendar item on time/date 
@@ -99,7 +100,8 @@ int timeColors[] = {TFT_RED, TFT_SILVER, TFT_SKYBLUE, TFT_GREEN, TFT_YELLOW, TFT
 int maxColorIndex = (sizeof(timeColors) / sizeof(timeColors[0]))-1;
 int curColorIndex = 0;
 bool time12HrMode = false;
-int lastDayClockRefresh = 0;
+//int lastDayClockRefresh = 0;
+int lastDayClockRefresh = -1;
 
 // stopwatch globals
 bool stopwatchRunning = false;
@@ -118,8 +120,8 @@ TickTwo secTimer(onTimer, 993, 0, MILLIS);  // 1000 ms was running slow over tim
 #define PAGE_DISPLAY_MILLIS 30000         // how long to display a page
 int lastPageDisplayMillis = millis();     // initialize page pause timer
 #define QUOTE_DISPLAY_MILLIS 5000         // how long to display a quote
-#define QUOTE_REFRESH_MILLIS 1080000        // interval for refreshing quotes 
-#define WEATHER_REFRESH_MILLIS 1800000     // interval for refreshing weather
+#define QUOTE_REFRESH_MILLIS 1080000        // interval for refreshing quotes 18 min = 1080000
+#define WEATHER_REFRESH_MILLIS 1800000     // interval for refreshing weather  30 min = 1800000
 // delay writing prefs to flash until they haven't changed for the defined interval
 int flashWriteDelayStart = -1;            // if it is -1 that means it hasn't changed
 #define FLASH_WRITE_DELAY_MS 5000         // wait this ms after setting changes to write to flash (to reduce flash wear)
@@ -590,7 +592,7 @@ void getQuotes(bool firstRun)
   #ifdef MEMCHECK
      Serial.printf("Start getQuotes: %d\n",esp_get_free_heap_size());
   #endif
-
+  
   #ifdef DEBUG
     if(firstRun)
     {
@@ -802,7 +804,7 @@ void displayQuote (char* symbol, float price, float change, float dayhigh, float
 }
 
 void getWeather(bool firstRun)
-{  
+{ 
   #ifdef DEBUG
     if(firstRun)
     {
@@ -904,9 +906,6 @@ void getWeather(bool firstRun)
     {
         myWeather.wind_dir[i] = tolower(myWeather.wind_dir[i]);
     }
-    // sync local time from the server while we're at it
-    const char* localTime = jsonObj["location"]["localtime"];
-    parseTime(localTime);
 
     tft.fillScreen(TFT_BLACK);
     #ifdef DEBUG
@@ -1060,7 +1059,6 @@ void parseTime(const char* localTime)
   cMin[lenMin]='\0';
   int tMin;
   sscanf(cMin,"%d", &tMin);
-
   setTime(tHr,tMin,0,tDay,tMon,tYr);  
   lastDayClockRefresh = tDay;
 }
@@ -1102,7 +1100,6 @@ void displayTime(void)
   // show am/pm if in 12 hr mode
   if(time12HrMode)
   {
-    //int timeEndPos = (tft.width()/2)+(tft.textWidth(sCurTime)/2,7);
     int timeEndPos = 190;
     if(isPM())
     {
@@ -1181,7 +1178,7 @@ void displayTime(void)
   // see if we need to refresh the time
   if(lastDayClockRefresh!=day())
   {
-    getTime(false);
+     getTime(false);
   }
 }
 
@@ -1244,13 +1241,16 @@ void getTime(bool firstRun)
     }
     // End the HTTP connection
     http.end();
-  
+
     // Parse response
     jsonObj = JSON.parse(payload);
-    // Read values
     
     // get local time 
     const char* localTime = jsonObj["datetime"];
+    #ifdef DEBUG
+      Serial.println(payload);
+      Serial.println(localTime);
+    #endif
     parseTime(localTime);
     tft.fillScreen(TFT_BLACK);
     #ifdef DEBUG
@@ -1262,7 +1262,6 @@ void getTime(bool firstRun)
     connectWifi(true);
   }
     tft.fillCircle(200,200,5,TFT_BLACK); // erase refresh indicator dot
-
 }
 
 double mapFloat (double x, double in_min, double in_max, double out_min, double out_max) {
