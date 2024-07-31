@@ -29,6 +29,7 @@ TODO:
 * DONE: BUG: stocks not autorefreshing on interval
 * DONE (I think): Make loss of connectivity after initial start up non-fatal. Just hold on to previous data until next refresh. But try to quietly connect wifi in this case. 
 * DONE: BUG: removed leftover time sync from the weather feed when weather would refresh, I know this time is not accurate and this is probably the root cause of the time drift. 
+* DONE: Added seconds to parseTime. Was assuming 0 before as "close enough" but being up to 59 sec off is annoying. 
 * 1. Scripts to manage changing displays for TFT_espi library  
 * 2. Better quotes API with 15 min delayed quotes when market is open
 * 3. next google calendar item on time/date 
@@ -1009,6 +1010,8 @@ void parseTime(const char* localTime)
   const int lenHr = 2;
   const int startMin = 14;
   const int lenMin = 2;
+  const int startSec = 17;
+  const int lenSec = 2;
 
   // extract the year
   char cYr[lenYr+1];
@@ -1059,7 +1062,18 @@ void parseTime(const char* localTime)
   cMin[lenMin]='\0';
   int tMin;
   sscanf(cMin,"%d", &tMin);
-  setTime(tHr,tMin,0,tDay,tMon,tYr);  
+
+  // extract the minute
+  char cSec[lenMin+1];
+  for (int i=0; i<lenSec; i++)
+  {
+    cSec[i]=localTime[i+startSec];
+  }
+  cSec[lenSec]='\0';
+  int tSec;
+  sscanf(cSec,"%d", &tSec);
+
+  setTime(tHr,tMin,tSec,tDay,tMon,tYr);  
   lastDayClockRefresh = tDay;
 }
 
