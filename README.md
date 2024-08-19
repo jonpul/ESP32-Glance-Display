@@ -36,5 +36,6 @@ This project demonstrates the following:
     FinnHub.io for closing stock prices. This needs a free account.
     WeatherAPI.com for weather. This needs a free account. 
 * using the ESP32 preferences library to store and retrieve data with the onboard flash. Here I've included some logic to reduce writes to the flash to reduce wear. This takes the form of waiting a few seconds after the user changes a setting before writing it.
+* show drawing of transparent PNGs from a URL (weather page). Based this on https://github.com/Bodmer/PNG_TEST_ONLY/tree/master/png_test_url_spiffs_2x with a small fix to support_function.h.
 
 See the companion project https://github.com/jonpul/Elecrow-2.4-ESP32-Glance-Display
