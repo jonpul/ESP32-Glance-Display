@@ -1,4 +1,6 @@
 /*
+
+ downloading images and displaying. maybe I can use this for weather icons https://www.youtube.com/watch?v=OXrJiHGQnQY
 TODO:
 * DONE: remove "delay()" from the quote display. replace it with millis so it is non-blocking
 * DONE: get touch working. Tap to force a refresh of current view is the goal.  
@@ -69,12 +71,14 @@ Preferences preferences;
 
 #define DEBUG   // verbose serial debug output
 //#define MEMCHECK   // serial memory stats output 
+#define DRAWWEATHERICON // show icons on weather page
 
 // gesture thresholds
 #define MILLIS_LONGPRESS 500      // how long makes a tap into a tap and hold?
 #define SWIPE_PIXEL_VARIANCE 40   // how many pixels to ignore from the start for a swipe gesture 
 #define SWIPE_MIN_LENGTH 30       // how many pixels required to make a swipe
 
+#define BACKLIGHT_PIN 2 // backlight pin
 enum touchGesture 
 {
   NOTOUCH = 0,
@@ -103,6 +107,9 @@ int curColorIndex = 0;
 bool time12HrMode = false;
 //int lastDayClockRefresh = 0;
 int lastDayClockRefresh = -1;
+int backlightOffHour = 1;  // the backlight sleep only works if the OFF hour is less than the ON hour. 
+int backlightOnHour = 6;
+bool backlightOn = false;
 
 // stopwatch globals
 bool stopwatchRunning = false;
@@ -155,11 +162,17 @@ struct weather {
                   char conditions[100];
                   int wind_spd;
                   char wind_dir[10];
+                  #ifdef DRAWWEATHERICON
+                    char iconPath[150];
+                  #endif
                 };
 weather myWeather;
 
 // display config and init
 TFT_eSPI tft = TFT_eSPI(240, 240); 
+#ifdef DRAWWEATHERICON
+  #include "support_functions.h"  // for PNG files (the icons used in weather)
+#endif
 
 // touch config and init
 #define TOUCH_INT 5
@@ -180,13 +193,13 @@ void setup() {
   #ifdef DEBUG   
     Serial.begin(115200);
   #endif
-
   preferences.begin("GlanceDisplay", false);
-  // Remove all preferences under the opened namespace
-  //preferences.clear();
+  // Remove all preferences under the opened namespace 
+  // preferences.clear();
   // pull settings from Flash if they exist
   curColorIndex = preferences.getUInt("ClockColorIdx", 0);
   time12HrMode = preferences.getBool("Clock12HrMode", false);
+
 
   // init the array with my symbols
   for(int i=0; i<= maxSymbolIndex; i++)
@@ -202,13 +215,16 @@ void setup() {
   secTimer.start();
 
   touch.begin(); 
-      
+    
   // prep the display
   tft.init();
-  tft.setRotation(1); 
-
+  tft.setRotation(0); //  0=USB on bottom    1=USB on on right side
+  backlightOn = true;  // starts with BL on from TFT_eSPI usersetup.h
+  pinMode(BACKLIGHT_PIN, OUTPUT); // backlight pin 
+  
   //attempt connection with retries and exit if failed
   connectWifi(false);
+
   if(!WiFi.isConnected())
   {
     tft.fillScreen(TFT_RED);
@@ -223,15 +239,15 @@ void setup() {
     getQuotes(true);
     tft.fillScreen(TFT_BLACK);
 
+    // get time
+    tft.drawString("Getting time...", tft.width()/2, 70,4);
+    getTime(true);
+    tft.fillScreen(TFT_BLACK);
     // get weather
     tft.drawString("Getting weather...", tft.width()/2, 70,4);
     getWeather(true);
     tft.fillScreen(TFT_BLACK);
 
-    // get time
-    tft.drawString("Getting time...", tft.width()/2, 70,4);
-    getTime(true);
-    tft.fillScreen(TFT_BLACK);
   }
 }
 
@@ -258,7 +274,7 @@ void loop()
   // }
   ///////////////////////////////////
   unsigned long int m = millis();
-    if(touch.available())
+  if(touch.available())
   {
     if(touch.data.points == 1) // only one finger
     {
@@ -336,19 +352,42 @@ void loop()
     switch(curPage)
     {
       case 0: // clock, do nothing on tap
+        if(!backlightOn)
+        {
+          digitalWrite(BACKLIGHT_PIN, HIGH);
+          backlightOn = true;
+        }
         break;
       case 1: // weather, do nothing on tap
+        if(!backlightOn)
+        {
+          digitalWrite(BACKLIGHT_PIN, HIGH);
+          backlightOn = true;
+        }
         break;
       case 2: // stocks, do nothing on tap
+        if(!backlightOn)
+        {
+          digitalWrite(BACKLIGHT_PIN, HIGH);
+          backlightOn = true;
+        }
         break;
       case 3: // stopwatch, toggle running or not
-        #ifdef DEBUG
-          if(!stopwatchRunning) Serial.printf("Stopwatch start %02d:%02d:%02d\n",hour(),minute(),second());
-          if(stopwatchRunning) Serial.printf("Stopwatch stop %02d:%02d:%02d\n",hour(),minute(),second());
-        #endif
-        stopwatchRunning = !stopwatchRunning;
-        tft.fillScreen(TFT_BLACK);
-        lastPageDisplayMillis = millis(); // reset page display timer so the page doesn't change quickly after we stop the stopwatch
+        if(!backlightOn)
+        {
+          digitalWrite(BACKLIGHT_PIN, HIGH);
+          backlightOn = true;
+        }
+        else   // stopwatch is handled differently because it has a tap action already. In this case, if the backlight is off, we consume the tap to turn the light on. If the light is on, we use it as start/stop the stopwatch
+        {
+          #ifdef DEBUG
+            if(!stopwatchRunning) Serial.printf("Stopwatch start %02d:%02d:%02d\n",hour(),minute(),second());
+            if(stopwatchRunning) Serial.printf("Stopwatch stop %02d:%02d:%02d\n",hour(),minute(),second());
+          #endif
+          stopwatchRunning = !stopwatchRunning;
+          tft.fillScreen(TFT_BLACK);
+          lastPageDisplayMillis = millis(); // reset page display timer so the page doesn't change quickly after we stop the stopwatch
+        }
         break;
     }
     gestureResult = NOTOUCH;
@@ -873,7 +912,7 @@ void getWeather(bool firstRun)
     }
     // End the HTTP connection
     http.end();
-  
+
     // Parse response
     jsonObj = JSON.parse(payload);
     // Read values
@@ -887,9 +926,34 @@ void getWeather(bool firstRun)
 
     myWeather.curHumidity = (int)jsonObj["current"]["humidity"];        
 
-    const char* conditions = jsonObj["current"]["condition"]["text"];
-    strcpy(myWeather.conditions, conditions);
-
+    #ifdef DRAWWEATHERICON
+      const char* conditions = jsonObj["current"]["condition"]["text"];
+      const char* iconPath = jsonObj["current"]["condition"]["icon"];
+  
+      // start with the icon path prefix (note this could also be 128x128)
+      char path[100]="https://cdn.weatherapi.com/weather/64x64/";
+  
+      // figure out night or day
+      // weather report is_day value is laggy so roughing it in here
+      // ignoring actual sunrise/sunset, this is close enough to pick the icon
+      char tod[10]="";
+      if(hour()>=6 && hour()<20)
+      {
+        strcpy(tod,"day/");
+      }
+      else
+      {
+        strcpy(tod,"night/"); 
+      }
+      
+      // find the actual filename
+      char* iconFilename = strrchr(iconPath, '/')+1;
+  
+      // put it all together and stick it in myWeather.iconPath
+      strcat(path,strcat(tod, iconFilename)); 
+      strcpy(myWeather.iconPath,path);
+    #endif
+        
     int todayLow  = jsonObj["forecast"]["forecastday"][0]["day"]["mintemp_f"]; // the zero-eth forecast day is today (and we're only getting one day of forecast)
     myWeather.todayLow = todayLow;
 
@@ -910,6 +974,7 @@ void getWeather(bool firstRun)
 
     tft.fillScreen(TFT_BLACK);
     #ifdef DEBUG
+      Serial.println(payload);
       Serial.println("Weather refreshed");
     #endif
 
@@ -919,7 +984,6 @@ void getWeather(bool firstRun)
     connectWifi(true);
   }
   tft.fillCircle(200,200,5,TFT_BLACK); // erase refresh indicator dot
-
 }
 
 void displayWeather()
@@ -954,21 +1018,31 @@ void displayWeather()
   } else if (curTemp >54 && curTemp <= 70)
   {
     tempColor = TFT_WHITE;
-  } else // (temp < 55>)
+  } else // (temp <= 54)
   {
     tempColor = TFT_BLUE;
   }
   tft.setTextColor(tempColor);
-  tft.drawNumber(curTemp, (tft.width()/2)-10, 100, GFXFF);
-  // draw degree sign (2 circles to make it thicker)
   char sCurTemp[10];
-  sprintf(sCurTemp,"%d",curTemp);
-  int degStart = (tft.textWidth(sCurTemp)/2)+(tft.width()/2); 
+  sprintf(sCurTemp,"%d",curTemp); // need a c-string to get the width with tft_espi to figure out where the degree symbol and F go
+  int degStart = (tft.textWidth(sCurTemp)/2)+(tft.width()/2);
+  int curTempX = (tft.width()/2);
+  #ifdef DRAWWEATHERICON
+    curTempX += 5;
+    degStart += 5; // move the temp over a bit to make room for the icon
+    setPngPosition(15,73);
+    load_png(myWeather.iconPath); 
+  #else
+    curTempX -= 10; 
+  #endif
+  tft.drawNumber(curTemp, curTempX, 100, GFXFF);
+  
+  // draw degree sign (2 circles to make it thicker)
   tft.drawCircle(degStart, 90, 3, tempColor);
   tft.drawCircle(degStart, 90, 4, tempColor);
   tft.setFreeFont(ROBOTO22);
   tft.drawString("F",degStart+12, 94);
-
+  
   tft.setTextColor(TFT_WHITE);
   if(strlen(myWeather.conditions)<=20)
   {
@@ -991,13 +1065,6 @@ void displayWeather()
 
 void parseTime(const char* localTime)
 {
-  // parse the local time we got from the weather request for use by the time page (ignores second)
-  // int tYr = (localTime.substring(0,4)).toInt();
-  // int tMon = (localTime.substring(5,7)).toInt();
-  // int tDay = (localTime.substring(8,10)).toInt();
-  // int tHr = (localTime.substring(11,13)).toInt();
-  // int tMin = (localTime.substring(14)).toInt();
-
   // time string looks like "2024-07-07T09:40:04.944551-05:00",
   // consts to avoid magic numbers
   const int startYr = 0;
@@ -1075,6 +1142,22 @@ void parseTime(const char* localTime)
 
   setTime(tHr,tMin,tSec,tDay,tMon,tYr);  
   lastDayClockRefresh = tDay;
+
+  // turn off backlight during sleep hours
+  if(backlightOn && (tHr>=backlightOffHour && tHr <backlightOnHour))
+  {
+    #ifdef DEBUG
+      Serial.println("Turning off backlight");
+    #endif
+    digitalWrite(BACKLIGHT_PIN, LOW);
+  }
+  if(!backlightOn && tHr>=backlightOnHour)
+  {
+    #ifdef DEBUG
+      Serial.println("Turning on backlight");
+    #endif
+    digitalWrite(BACKLIGHT_PIN, HIGH); 
+  }
 }
 
 void displayTime(void)
@@ -1454,3 +1537,30 @@ void displayStopwatch()
   }
 }
 
+int string_len(char * string){
+  int len = 0;
+  while(*string!='\0'){
+    len++;
+    string++;
+  }
+  return len;
+}
+
+int string_contains(char *string, char *substring){
+  int start_index = 0;
+  int string_index=0, substring_index=0;
+  int substring_len =string_len(substring);
+  int s_len = string_len(string);
+  while(substring_index<substring_len && string_index<s_len){
+    if(*(string+string_index)==*(substring+substring_index)){
+      substring_index++;
+    }
+    string_index++;
+    if(substring_index==substring_len){
+      return string_index-substring_len+1;
+    }
+  }
+
+  return 0;
+
+}
