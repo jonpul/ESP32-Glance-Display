@@ -97,7 +97,7 @@ enum touchGesture
 //  STOPWATCH = 3;
 const int numPages = 4;
 int curPage = 0;
-bool pageJustChanged = false;
+bool pageJustChanged = true;
 
 // clock globals
 int prevMinute = -1;
@@ -346,7 +346,7 @@ void loop()
       }
     }
   } // end gesture handling
-
+    
   if(gestureResult == TAP)
   {
     switch(curPage)
@@ -436,12 +436,15 @@ void loop()
       case 0: // change clock color
         curColorIndex++;
         flashWriteDelayStart = millis();
+        pageJustChanged = true;
         break;
       case 1: // do nothing for weather
+        pageJustChanged = true;
         break;
       case 2: // next symbol for stocks
         currentSymbol++;
         lastDisplayMillis = millis();
+        pageJustChanged = true;
         //lastQuoteRefreshMillis = millis();
         break;
       case 3: // do nothing for stopwatch
@@ -458,14 +461,17 @@ void loop()
       case 0: // change clock color
         curColorIndex--;
         flashWriteDelayStart = millis();
-       break;
+        pageJustChanged = true;
+        break;
       case 1: // do nothing for weather
+        pageJustChanged = true;
         break;
       case 2: // previous symbol for stocks
         currentSymbol--;
         // we don't want the display to change or the refresh to happen right when the page changes
         // as that ends up at a blank screen for a moment, so just reset the timers for them
         lastDisplayMillis = millis();
+        pageJustChanged = true;
         //lastQuoteRefreshMillis = millis();
         break;
       case 3: // do nothing for stopwatch
@@ -519,7 +525,10 @@ void loop()
       {
         curColorIndex = maxColorIndex;
       }
-      displayTime();
+      if(pageJustChanged)
+      {
+        displayTime();
+      }
       pageJustChanged = false;
       break;
     case 1:  // weather
@@ -527,15 +536,15 @@ void loop()
       {
           getWeather(false);
           lastWeatherRefreshMillis = millis();
+          pageJustChanged = false;
       }
-      displayWeather();
+      if(pageJustChanged)
+      {
+        displayWeather();
+      }
       pageJustChanged = false;
       break;
     case 2:  // stocks
-      if(pageJustChanged)
-      {
-        //lastQuoteRefreshMillis = millis();
-      }
       if(currentSymbol > maxSymbolIndex)
       {
         currentSymbol = 0;
@@ -1029,9 +1038,7 @@ void displayWeather()
   int curTempX = (tft.width()/2);
   #ifdef DRAWWEATHERICON
     curTempX += 5;
-    degStart += 5; // move the temp over a bit to make room for the icon
-    setPngPosition(15,73);
-    load_png(myWeather.iconPath); 
+    degStart += 9; // move the temp over a bit to make room for the icon
   #else
     curTempX -= 10; 
   #endif
@@ -1061,6 +1068,11 @@ void displayWeather()
   char sMinMax [80];
   sprintf(sMinMax, "%d/%d", myWeather.todayHigh, myWeather.todayLow);
   tft.drawString(sMinMax, tft.width()/2, 190, GFXFF);
+  // draw the icon after the rest of the page is drawn
+  #ifdef DRAWWEATHERICON
+    setPngPosition(15,73);
+    load_png(myWeather.iconPath); 
+  #endif
 }
 
 void parseTime(const char* localTime)
