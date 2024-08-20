@@ -50,6 +50,7 @@ void pngle_on_draw(pngle_t *pngle, uint32_t x, uint32_t y, uint32_t w, uint32_t 
     }
   #else
     tft.drawPixel(x+png_dx, y+png_dy, color);  // <<<<<< I edited this to respect PNG position original: tft.drawPixel(x, y, color);
+    //tft.drawPixel(x+png_dx, y+png_dy, TFT_DARKGREY);  // experimenting with changing to monochrome
   #endif
   }
 }
@@ -114,7 +115,7 @@ void load_png(const char *url)
   if (httpCode != HTTP_CODE_OK) {
     Serial.printf("HTTP ERROR: %d\n", httpCode);
     http.end();
-    return ;
+    return;
   }
   int total = http.getSize();
 
@@ -142,6 +143,7 @@ void load_png(const char *url)
       int fed = pngle_feed(pngle, buf, remain + len);
       if (fed < 0) {
         Serial.printf("ERROR: %s\n", pngle_error(pngle));
+        return;
         break;
       }
       remain = remain + len - fed;
@@ -165,4 +167,5 @@ void load_png(const char *url)
   #endif
   pngle_destroy(pngle);
   http.end();
+  return;
 }

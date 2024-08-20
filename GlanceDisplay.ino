@@ -123,7 +123,6 @@ int stopwatchPrevSec = 0;
 void onTimer(void); 
 TickTwo secTimer(onTimer, 993, 0, MILLIS);  // 1000 ms was running slow over time. After testing a range of values, this was most accurate
 
-
 // timer values
 #define PAGE_DISPLAY_MILLIS 30000         // how long to display a page
 int lastPageDisplayMillis = millis();     // initialize page pause timer
@@ -354,29 +353,25 @@ void loop()
       case 0: // clock, do nothing on tap
         if(!backlightOn)
         {
-          digitalWrite(BACKLIGHT_PIN, HIGH);
-          backlightOn = true;
+          setBacklight(true);
         }
         break;
       case 1: // weather, do nothing on tap
         if(!backlightOn)
         {
-          digitalWrite(BACKLIGHT_PIN, HIGH);
-          backlightOn = true;
+          setBacklight(true);
         }
         break;
       case 2: // stocks, do nothing on tap
         if(!backlightOn)
         {
-          digitalWrite(BACKLIGHT_PIN, HIGH);
-          backlightOn = true;
+          setBacklight(true);
         }
         break;
       case 3: // stopwatch, toggle running or not
         if(!backlightOn)
         {
-          digitalWrite(BACKLIGHT_PIN, HIGH);
-          backlightOn = true;
+          setBacklight(true);
         }
         else   // stopwatch is handled differently because it has a tap action already. In this case, if the backlight is off, we consume the tap to turn the light on. If the light is on, we use it as start/stop the stopwatch
         {
@@ -402,10 +397,12 @@ void loop()
         time12HrMode = !time12HrMode;
         flashWriteDelayStart = millis();
         tft.fillScreen(TFT_BLACK);
+        pageJustChanged = true;
         break; 
       case 1: // Weather
         // get latest weather
         getWeather(true);   // show any errors on manual refresh
+        pageJustChanged = true;
         break;
       case 2: // Stocks
         // refresh on longtap but limited to more than 2 sec since last refresh (REST calls will take longer anyway, but just for completeness)
@@ -415,6 +412,7 @@ void loop()
           lastQuoteRefreshMillis = millis(); // reset the refresh timer since we just refreshed      
           //Serial.printf("lastQuoteRefreshMillis:%d  QUOTE_REFRESH_MILLIS:%d   millis:%d\n",lastQuoteRefreshMillis,QUOTE_REFRESH_MILLIS,millis());
         }
+        pageJustChanged = true;
         break;
       case 3: // Stopwatch
         // stop the stopwatch if it is running and clear it
@@ -439,7 +437,7 @@ void loop()
         pageJustChanged = true;
         break;
       case 1: // do nothing for weather
-        pageJustChanged = true;
+        //pageJustChanged = true;
         break;
       case 2: // next symbol for stocks
         currentSymbol++;
@@ -451,7 +449,6 @@ void loop()
         break;
     }
     gestureResult = NOTOUCH;
-    tft.fillScreen(TFT_BLACK); 
   }
   if(gestureResult == SWIPEDOWN)
   {
@@ -464,7 +461,7 @@ void loop()
         pageJustChanged = true;
         break;
       case 1: // do nothing for weather
-        pageJustChanged = true;
+        //pageJustChanged = true;
         break;
       case 2: // previous symbol for stocks
         currentSymbol--;
@@ -478,7 +475,6 @@ void loop()
         break;
     }
     gestureResult = NOTOUCH;
-    tft.fillScreen(TFT_BLACK);    
   }
   if(gestureResult == SWIPELEFT)
   {
@@ -493,7 +489,6 @@ void loop()
       }
       gestureResult = NOTOUCH;
       pageJustChanged = true;
-      tft.fillScreen(TFT_BLACK); 
     }
    }
   if(gestureResult == SWIPERIGHT)
@@ -509,7 +504,6 @@ void loop()
       }
       gestureResult = NOTOUCH;
       pageJustChanged = true;
-      tft.fillScreen(TFT_BLACK); 
     }
   }
 
@@ -527,6 +521,7 @@ void loop()
       }
       if(pageJustChanged)
       {
+        tft.fillScreen(TFT_BLACK);
         displayTime();
       }
       pageJustChanged = false;
@@ -557,17 +552,18 @@ void loop()
       {
         lastSymbolID = currentSymbol;
       }
+      
       // if the page just changed, or the symbol changed, and there is data, show it
       if(pageJustChanged || (quotes[currentSymbol].price > -1 && lastSymbolID != currentSymbol))
       {
         lastSymbolID = currentSymbol;
+        tft.fillScreen(TFT_BLACK);  
         displayQuote(quotes[currentSymbol].symbol, quotes[currentSymbol].price, quotes[currentSymbol].change, quotes[currentSymbol].dayhigh, quotes[currentSymbol].daylow);
         pageJustChanged = false;
       }
       if(m > (QUOTE_DISPLAY_MILLIS + lastDisplayMillis))
       {
         currentSymbol++;  // next stock
-        tft.fillScreen(TFT_BLACK);   
         lastDisplayMillis = millis();
       }
 
@@ -588,7 +584,12 @@ void loop()
       }
       break;
     case 3: // stopwatch
+      if(pageJustChanged)
+      {
+        tft.fillScreen(TFT_BLACK);
+      }
       displayStopwatch();
+      pageJustChanged = false;
       break;
   }
   // check the page timer and increment the page if its time (unless stopwatch is running)
@@ -602,7 +603,6 @@ void loop()
     }
     gestureResult = NOTOUCH;
     pageJustChanged = true;
-    tft.fillScreen(TFT_BLACK);
   }  
   if(!stopwatchRunning)
   {
@@ -621,9 +621,9 @@ void loop()
       #endif
     }
   }
-  // #ifdef MEMCHECK
-  //   Serial.println(esp_get_free_heap_size());
-  // #endif
+   #ifdef MEMCHECK
+     Serial.println(esp_get_free_heap_size());
+   #endif
 } // end of loop()
 
 void dumpArrayToDebug()
@@ -937,30 +937,48 @@ void getWeather(bool firstRun)
 
     #ifdef DRAWWEATHERICON
       const char* conditions = jsonObj["current"]["condition"]["text"];
+      strcpy(myWeather.conditions, conditions);
       const char* iconPath = jsonObj["current"]["condition"]["icon"];
   
-      // start with the icon path prefix (note this could also be 128x128)
-      char path[100]="https://cdn.weatherapi.com/weather/64x64/";
-  
+      // start with the icon path prefix (note this could also be 64x64 but those files have lots of errors)
+      char path[100]="https://cdn.weatherapi.com/weather/128x128/";
+
+      // find the actual filename
+      char* iconFilename = strrchr(iconPath, '/')+1;
+
       // figure out night or day
       // weather report is_day value is laggy so roughing it in here
       // ignoring actual sunrise/sunset, this is close enough to pick the icon
       char tod[10]="";
       if(hour()>=6 && hour()<20)
       {
-        strcpy(tod,"day/");
+        strcpy(tod,"day/"); 
       }
       else
       {
-        strcpy(tod,"night/"); 
+        strcpy(tod,"night/");
+//        // HACK ALERT
+//        // handle bad png file cases from weatherapi.com. just use the "day" icon for these even though that sucks
+//        // repeated calls to these bad files cause a crash probably due to a mem leak in the PNG library somewhere
+//        if(strcmp("113.png",iconFilename) == 0)
+//        {
+//          #ifdef DEBUG
+//            Serial.println("Subbing day for night because of bad 113.png on the server");
+//          #endif
+//          strcpy(tod,"day/");
+//        }
+//        else
+//        {
+//          strcpy(tod,"night/"); 
+//        }
       }
       
-      // find the actual filename
-      char* iconFilename = strrchr(iconPath, '/')+1;
-  
       // put it all together and stick it in myWeather.iconPath
       strcat(path,strcat(tod, iconFilename)); 
       strcpy(myWeather.iconPath,path);
+      #ifdef DEBUG 
+        Serial.printf("getWeather constructed iconPath: %s\n",myWeather.iconPath);
+      #endif
     #endif
         
     int todayLow  = jsonObj["forecast"]["forecastday"][0]["day"]["mintemp_f"]; // the zero-eth forecast day is today (and we're only getting one day of forecast)
@@ -980,8 +998,6 @@ void getWeather(bool firstRun)
     {
         myWeather.wind_dir[i] = tolower(myWeather.wind_dir[i]);
     }
-
-    tft.fillScreen(TFT_BLACK);
     #ifdef DEBUG
       Serial.println(payload);
       Serial.println("Weather refreshed");
@@ -997,12 +1013,22 @@ void getWeather(bool firstRun)
 
 void displayWeather()
 {
+  tft.fillScreen(TFT_BLACK);
+  #ifdef DRAWWEATHERICON
+    setPngPosition(6,35);
+    load_png(myWeather.iconPath);
+  #endif
   tft.setTextSize(1); 
   tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(TFT_SILVER);
   tft.setFreeFont(ROBOTO22);
+  tft.setTextColor(TFT_BLACK);
+  tft.drawString(myWeather.city, (tft.width()/2)+1, 40+1, GFXFF); // drop shadow 1px
+  tft.setTextColor(TFT_SILVER);
   tft.drawString(myWeather.city, tft.width()/2, 40, GFXFF); 
   tft.setFreeFont(ROBOTO22);
+  tft.setTextColor(TFT_BLACK);
+  tft.drawString(myWeather.state, (tft.width()/2)+1, 60+1, GFXFF); // drop shadow 1px
+  tft.setTextColor(TFT_SILVER);
   tft.drawString(myWeather.state, tft.width()/2, 60, GFXFF);
   tft.setFreeFont(ROBOTO48);
   // temp color bands
@@ -1014,7 +1040,6 @@ void displayWeather()
 
   int tempColor = 0;
   int curTemp = myWeather.curTemp;
-
   if(curTemp > 99)
   {
     tempColor = TFT_RED;
@@ -1032,25 +1057,24 @@ void displayWeather()
     tempColor = TFT_BLUE;
   }
   tft.setTextColor(tempColor);
+
+  //curTemp = 140;
+  
   char sCurTemp[10];
   sprintf(sCurTemp,"%d",curTemp); // need a c-string to get the width with tft_espi to figure out where the degree symbol and F go
-  int degStart = (tft.textWidth(sCurTemp)/2)+(tft.width()/2);
-  int curTempX = (tft.width()/2);
+  int curTempX = (tft.width()/2)-10;
   #ifdef DRAWWEATHERICON
-    curTempX += 5;
-    degStart += 9; // move the temp over a bit to make room for the icon
-  #else
-    curTempX -= 10; 
+    curTempX += 40; 
   #endif
   tft.drawNumber(curTemp, curTempX, 100, GFXFF);
+  int degStart = (tft.textWidth(sCurTemp)/2)+(tft.width()/2)+40;
   
   // draw degree sign (2 circles to make it thicker)
   tft.drawCircle(degStart, 90, 3, tempColor);
   tft.drawCircle(degStart, 90, 4, tempColor);
   tft.setFreeFont(ROBOTO22);
   tft.drawString("F",degStart+12, 94);
-  
-  tft.setTextColor(TFT_WHITE);
+
   if(strlen(myWeather.conditions)<=20)
   {
     tft.setFreeFont(ROBOTO22);
@@ -1059,7 +1083,11 @@ void displayWeather()
   {
     tft.setFreeFont(ROBOTOTHIN10);
   }
-  tft.drawString(myWeather.conditions, tft.width()/2, 138, GFXFF);
+  tft.setTextColor(TFT_BLACK);
+  tft.drawString(myWeather.conditions, (tft.width()/2)+1, 138+1, GFXFF); // 1 px drop shadow
+  tft.setTextColor(TFT_WHITE);
+  tft.drawString(myWeather.conditions, (tft.width()/2), 138, GFXFF); 
+
   tft.setFreeFont(ROBOTO24);
   int iH=myWeather.curHumidity;
   char sH [80];
@@ -1068,11 +1096,6 @@ void displayWeather()
   char sMinMax [80];
   sprintf(sMinMax, "%d/%d", myWeather.todayHigh, myWeather.todayLow);
   tft.drawString(sMinMax, tft.width()/2, 190, GFXFF);
-  // draw the icon after the rest of the page is drawn
-  #ifdef DRAWWEATHERICON
-    setPngPosition(15,73);
-    load_png(myWeather.iconPath); 
-  #endif
 }
 
 void parseTime(const char* localTime)
@@ -1155,20 +1178,20 @@ void parseTime(const char* localTime)
   setTime(tHr,tMin,tSec,tDay,tMon,tYr);  
   lastDayClockRefresh = tDay;
 
-  // turn off backlight during sleep hours
+  // turn off backlight during sleep hours  
   if(backlightOn && (tHr>=backlightOffHour && tHr <backlightOnHour))
   {
     #ifdef DEBUG
       Serial.println("Turning off backlight");
     #endif
-    digitalWrite(BACKLIGHT_PIN, LOW);
+    setBacklight(false);
   }
   if(!backlightOn && tHr>=backlightOnHour)
   {
     #ifdef DEBUG
       Serial.println("Turning on backlight");
     #endif
-    digitalWrite(BACKLIGHT_PIN, HIGH); 
+    setBacklight(true);
   }
 }
 
@@ -1575,4 +1598,23 @@ int string_contains(char *string, char *substring){
 
   return 0;
 
+}
+
+void setBacklight(bool setBacklightOn)
+{
+  if(setBacklightOn)
+  {
+    digitalWrite(BACKLIGHT_PIN, HIGH);
+    #ifdef DEBUG
+      Serial.printf("Backlight on at %d:%d:%d\n",hour(),minute(),second());
+    #endif
+  }
+  else
+  {
+    digitalWrite(BACKLIGHT_PIN, LOW);
+    #ifdef DEBUG
+      Serial.printf("Backlight off at %d:%d:%d\n",hour(),minute(),second());
+    #endif
+  }
+  backlightOn = setBacklightOn;
 }
