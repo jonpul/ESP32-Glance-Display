@@ -530,9 +530,14 @@ void loop()
     case 1:  // weather
       if(m > (WEATHER_REFRESH_MILLIS + lastWeatherRefreshMillis))
       {
+        // don't waste refreh on weather if the screen is off, we'll refresh it when the screen turns on
+        if(backlightOn)
+        {
           getWeather(false);
-          lastWeatherRefreshMillis = millis();
           pageJustChanged = false;
+        }
+        lastWeatherRefreshMillis = millis();
+
       }
       if(pageJustChanged)
       {
@@ -573,7 +578,10 @@ void loop()
       {
         if((m > (QUOTE_REFRESH_MILLIS + lastQuoteRefreshMillis)))
         {
-          getQuotes(false);
+          if(backlightOn)
+          {
+            getQuotes(false);
+          }
           lastQuoteRefreshMillis = millis();
         }
       }  
@@ -1738,6 +1746,11 @@ void setBacklight(bool setBacklightOn)
     #ifdef DEBUG
       Serial.printf("Backlight on at %d:%d:%d\n",hour(),minute(),second());
     #endif
+    // refresh things we ignored when the screen was off
+    getWeather(false);
+    lastWeatherRefreshMillis = millis();
+    getQuotes(false);
+    lastQuoteRefreshMillis = millis();
   }
   else
   {
