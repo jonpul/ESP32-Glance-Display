@@ -72,6 +72,7 @@ Preferences preferences;
 #define DEBUG   // verbose serial debug output
 //#define MEMCHECK   // serial memory stats output 
 #define DRAWWEATHERICON // show icons on weather page
+#define USEOPENWEATHERAPI   // use openweather instead of weatherAPI.com
 
 // gesture thresholds
 #define MILLIS_LONGPRESS 500      // how long makes a tap into a tap and hold?
@@ -854,168 +855,297 @@ void displayQuote (char* symbol, float price, float change, float dayhigh, float
 
 void getWeather(bool firstRun)
 { 
-  #ifdef DEBUG
-    if(firstRun)
-    {
-      Serial.println("STARTUP: getting weather");
-    }
-    else
-    {
-      Serial.println("NON-STARTUP: getting weather");
-    }
-  #endif
-
-  JSONVar jsonObj = null;
-
-  if(WiFi.isConnected())
-  {
-    // Initialize the HTTPClient object
-    HTTPClient http;
-    tft.fillCircle(200,200,5,TFT_BLUE); // draw refresh indicator dot
-    
-    // Construct the URL using token from secrets.h  
-    //this is weatherapi.com one day forecast request, which also returns location and current conditions
-    // use zipcode if there is one, otherwise use public IP location 
-    String url = "";
-    if((String)(WEATHER_ZIP)!="")
-    {
-      url = "http://api.weatherapi.com/v1/forecast.json?key="+(String)WEATHER_TOKEN+"&q="+(String)WEATHER_ZIP+"&aqi=no&days=1";
-    }  
-    else
-    {
-      url = "http://api.weatherapi.com/v1/forecast.json?key="+(String)WEATHER_TOKEN+"&q=auto:ip&aqi=no&days=1";
-    }
-    // Make the HTTP GET request 
-    http.begin(url);
-    int httpCode = http.GET();
-
-    String payload = "";
-    // Check the return code
-    if (httpCode == HTTP_CODE_OK) {
-      // If the server responds with 200, return the payload
-      payload = http.getString();
-    } else if (httpCode == HTTP_CODE_UNAUTHORIZED) {
-      // If the server responds with 401, print an error message
-      #ifdef DEBUG
-        Serial.println(F("Weather API Key error."));
-        Serial.println(String(http.getString()));
-      #endif
-      tft.fillScreen(TFT_RED);
-      tft.setTextSize(1); 
-      tft.setTextColor(TFT_WHITE);
-      tft.drawString("Weather Token Error", tft.width()/2, 100,4);
-      delay(1000);
-      tft.fillScreen(TFT_BLACK);
-    } else {
-      // For any other HTTP response code, print it
-      #ifdef DEBUG
-        Serial.println(F("Received unexpected HTTP response:"));
-        Serial.println(httpCode);
-      #endif
-      tft.fillScreen(TFT_RED);
-      tft.setTextSize(1); 
-      tft.setTextColor(TFT_WHITE);
-      tft.drawString("Weather Service Error", tft.width()/2, 100,4);
-      delay(1000);
-      tft.fillScreen(TFT_BLACK);
-    }
-    // End the HTTP connection
-    http.end();
-
-    // Parse response
-    jsonObj = JSON.parse(payload);
-    // Read values
-    const char* city = jsonObj["location"]["name"];
-    strcpy(myWeather.city, city);
-
-    const char* state = jsonObj["location"]["region"];
-    strcpy(myWeather.state, state);
-
-    myWeather.curTemp = (int)jsonObj["current"]["temp_f"];
-
-    myWeather.curHumidity = (int)jsonObj["current"]["humidity"];        
-
-    #ifdef DRAWWEATHERICON
-      const char* conditions = jsonObj["current"]["condition"]["text"];
-      strcpy(myWeather.conditions, conditions);
-      const char* iconPath = jsonObj["current"]["condition"]["icon"];
-  
-      // start with the icon path prefix (note this could also be 64x64 but those files have lots of errors)
-      char path[100]="https://cdn.weatherapi.com/weather/128x128/";
-
-      // find the actual filename
-      char* iconFilename = strrchr(iconPath, '/')+1;
-
-      // figure out night or day
-      // weather report is_day value is laggy so roughing it in here
-      // ignoring actual sunrise/sunset, this is close enough to pick the icon
-      char tod[10]="";
-      if(hour()>=6 && hour()<20)
+  // if we are using OpenWeather, jump to that and then exit out. 
+  #ifdef USEOPENWEATHERAPI
+    getWeatherOpenWeather(firstRun);
+    return;
+  #else 
+    #ifdef DEBUG
+      if(firstRun)
       {
-        strcpy(tod,"day/"); 
+        Serial.println("STARTUP: getting weather");
       }
       else
       {
-        strcpy(tod,"night/");
-//        // HACK ALERT
-//        // handle bad png file cases from weatherapi.com. just use the "day" icon for these even though that sucks
-//        // repeated calls to these bad files cause a crash probably due to a mem leak in the PNG library somewhere
-//        if(strcmp("113.png",iconFilename) == 0)
-//        {
-//          #ifdef DEBUG
-//            Serial.println("Subbing day for night because of bad 113.png on the server");
-//          #endif
-//          strcpy(tod,"day/");
-//        }
-//        else
-//        {
-//          strcpy(tod,"night/"); 
-//        }
+        Serial.println("NON-STARTUP: getting weather");
       }
-      
-      // put it all together and stick it in myWeather.iconPath
-      strcat(path,strcat(tod, iconFilename)); 
-      strcpy(myWeather.iconPath,path);
-      #ifdef DEBUG 
-        Serial.printf("getWeather constructed iconPath: %s\n",myWeather.iconPath);
-      #endif
     #endif
-        
-    int todayLow  = jsonObj["forecast"]["forecastday"][0]["day"]["mintemp_f"]; // the zero-eth forecast day is today (and we're only getting one day of forecast)
-    myWeather.todayLow = todayLow;
-
-    int todayHigh  = jsonObj["forecast"]["forecastday"][0]["day"]["maxtemp_f"]; // the zero-eth forecast day is today (and we're only getting one day of forecast
-    myWeather.todayHigh = todayHigh;
-
-    int wind_spd = jsonObj["current"]["wind_mph"];
-    myWeather.wind_spd = wind_spd;
-
-    const char* wind_dir = jsonObj["current"]["wind_dir"];
-    // copy wind direction to the struct and make it lowercase
-    strcpy(myWeather.wind_dir, wind_dir);
-    int len = strlen(myWeather.wind_dir);
-    for (int i = 0; i < len; i++) 
+  
+    JSONVar jsonObj = null;
+  
+    if(WiFi.isConnected())
     {
-        myWeather.wind_dir[i] = tolower(myWeather.wind_dir[i]);
+      // Initialize the HTTPClient object
+      HTTPClient http;
+      tft.fillCircle(200,200,5,TFT_BLUE); // draw refresh indicator dot
+      
+      // Construct the URL using token from secrets.h  
+      //this is weatherapi.com one day forecast request, which also returns location and current conditions
+      // use zipcode if there is one, otherwise use public IP location 
+      String url = "";
+      if((String)(WEATHER_ZIP)!="")
+      {
+        url = "http://api.weatherapi.com/v1/forecast.json?key="+(String)WEATHER_TOKEN+"&q="+(String)WEATHER_ZIP+"&aqi=no&days=1";
+      }  
+      else
+      {
+        url = "http://api.weatherapi.com/v1/forecast.json?key="+(String)WEATHER_TOKEN+"&q=auto:ip&aqi=no&days=1";
+      }
+      // Make the HTTP GET request 
+      http.begin(url);
+      int httpCode = http.GET();
+  
+      String payload = "";
+      // Check the return code
+      if (httpCode == HTTP_CODE_OK) {
+        // If the server responds with 200, return the payload
+        payload = http.getString();
+      } else if (httpCode == HTTP_CODE_UNAUTHORIZED) {
+        // If the server responds with 401, print an error message
+        #ifdef DEBUG
+          Serial.println(F("Weather API Key error."));
+          Serial.println(String(http.getString()));
+        #endif
+        tft.fillScreen(TFT_RED);
+        tft.setTextSize(1); 
+        tft.setTextColor(TFT_WHITE);
+        tft.drawString("Weather Token Error", tft.width()/2, 100,4);
+        delay(1000);
+        tft.fillScreen(TFT_BLACK);
+      } else {
+        // For any other HTTP response code, print it
+        #ifdef DEBUG
+          Serial.println(F("Received unexpected HTTP response:"));
+          Serial.println(httpCode);
+        #endif
+        tft.fillScreen(TFT_RED);
+        tft.setTextSize(1); 
+        tft.setTextColor(TFT_WHITE);
+        tft.drawString("Weather Service Error", tft.width()/2, 100,4);
+        delay(1000);
+        tft.fillScreen(TFT_BLACK);
+      }
+      // End the HTTP connection
+      http.end();
+  
+      // Parse response
+      jsonObj = JSON.parse(payload);
+      // Read values
+      const char* city = jsonObj["location"]["name"];
+      strcpy(myWeather.city, city);
+  
+      const char* state = jsonObj["location"]["region"];
+      strcpy(myWeather.state, state);
+  
+      myWeather.curTemp = (int)jsonObj["current"]["temp_f"];
+  
+      myWeather.curHumidity = (int)jsonObj["current"]["humidity"];        
+      const char* conditions = jsonObj["current"]["condition"]["text"];
+      strcpy(myWeather.conditions, conditions);
+  
+      #ifdef DRAWWEATHERICON
+        const char* iconPath = jsonObj["current"]["condition"]["icon"];
+    
+        // start with the icon path prefix (note this could also be 64x64 but those files have lots of errors)
+        char path[100]="https://cdn.weatherapi.com/weather/128x128/";
+  
+        // find the actual filename
+        char* iconFilename = strrchr(iconPath, '/')+1;
+  
+        // figure out night or day
+        // weather report is_day value is laggy so roughing it in here
+        // ignoring actual sunrise/sunset, this is close enough to pick the icon
+        char tod[10]="";
+        if(hour()>=6 && hour()<20)
+        {
+          strcpy(tod,"day/"); 
+        }
+        else
+        {
+          strcpy(tod,"night/");
+        }
+        
+        // put it all together and stick it in myWeather.iconPath
+        strcat(path,strcat(tod, iconFilename)); 
+        strcpy(myWeather.iconPath,path);
+        #ifdef DEBUG 
+          Serial.printf("getWeather constructed iconPath: %s\n",myWeather.iconPath);
+        #endif
+      #endif
+          
+      int todayLow  = jsonObj["forecast"]["forecastday"][0]["day"]["mintemp_f"]; // the zero-eth forecast day is today (and we're only getting one day of forecast)
+      myWeather.todayLow = todayLow;
+  
+      int todayHigh  = jsonObj["forecast"]["forecastday"][0]["day"]["maxtemp_f"]; // the zero-eth forecast day is today (and we're only getting one day of forecast
+      myWeather.todayHigh = todayHigh;
+  
+      int wind_spd = jsonObj["current"]["wind_mph"];
+      myWeather.wind_spd = wind_spd;
+  
+      const char* wind_dir = jsonObj["current"]["wind_dir"];
+      // copy wind direction to the struct and make it lowercase
+      strcpy(myWeather.wind_dir, wind_dir);
+      int len = strlen(myWeather.wind_dir);
+      for (int i = 0; i < len; i++) 
+      {
+          myWeather.wind_dir[i] = tolower(myWeather.wind_dir[i]);
+      }
+      #ifdef DEBUG
+        Serial.println(payload);
+        Serial.println("Weather refreshed");
+      #endif
+  
     }
-    #ifdef DEBUG
-      Serial.println(payload);
-      Serial.println("Weather refreshed");
-    #endif
+    else if(!firstRun)
+    {
+      connectWifi(true);
+    }
+    tft.fillCircle(200,200,5,TFT_BLACK); // erase refresh indicator dot
+  #endif // end of else clause of #ifdef USEOPENWEATHERAPI
+}
 
-  }
-  else if(!firstRun)
-  {
-    connectWifi(true);
-  }
-  tft.fillCircle(200,200,5,TFT_BLACK); // erase refresh indicator dot
+void getWeatherOpenWeather(bool firstRun)
+{ 
+  #ifdef USEOPENWEATHERAPI
+    #ifdef DEBUG
+      if(firstRun)
+      {
+        Serial.println("STARTUP: getting weather with OpenWeather");
+      }
+      else
+      {
+        Serial.println("NON-STARTUP: getting weather with OpenWeather");
+      }
+    #endif
+  
+    JSONVar jsonObj = null;
+  
+    if(WiFi.isConnected())
+    {
+      // Initialize the HTTPClient object
+      HTTPClient http;
+      tft.fillCircle(200,200,5,TFT_BLUE); // draw refresh indicator dot
+      
+      // Construct the URL using token from secrets.h  
+      //this is OpenWeather API current forecast request, which also returns daily info and current conditions
+      String url = "";
+      
+      url = "https://api.openweathermap.org/data/3.0/onecall?lat="+String(OPENWEATHER_LAT)+"&lon="+String(OPENWEATHER_LONG)+"&appid="+String(OPENWEATHER_TOKEN)+"&units=IMPERIAL&exclude=hourly,minutely,alerts";
+   
+      // Make the HTTP GET request 
+      http.begin(url);
+      int httpCode = http.GET();
+  
+      String payload = "";
+      // Check the return code
+      if (httpCode == HTTP_CODE_OK) {
+        // If the server responds with 200, return the payload
+        payload = http.getString();
+      } else if (httpCode == HTTP_CODE_UNAUTHORIZED) {
+        // If the server responds with 401, print an error message
+        #ifdef DEBUG
+          Serial.println(F("OpenWeather API Key error."));
+          Serial.println(String(http.getString()));
+        #endif
+        tft.fillScreen(TFT_RED);
+        tft.setTextSize(1); 
+        tft.setTextColor(TFT_WHITE);
+        tft.drawString("Weather Token Error", tft.width()/2, 100,4);
+        delay(1000);
+        tft.fillScreen(TFT_BLACK);
+      } else {
+        // For any other HTTP response code, print it
+        #ifdef DEBUG
+          Serial.println(F("Received unexpected HTTP response:"));
+          Serial.println(httpCode);
+        #endif
+        tft.fillScreen(TFT_RED);
+        tft.setTextSize(1); 
+        tft.setTextColor(TFT_WHITE);
+        tft.drawString("OpenWeather Service Error", tft.width()/2, 100,4);
+        delay(1000);
+        tft.fillScreen(TFT_BLACK);
+      }
+      // End the HTTP connection
+      http.end();
+  
+      // Parse response
+      jsonObj = JSON.parse(payload);
+
+      // Read values
+      strcpy(myWeather.city, OPENWEATHER_CITY);
+      strcpy(myWeather.state, OPENWEATHER_REGION);
+     
+      myWeather.curTemp = (int)jsonObj["current"]["temp"];
+  
+      myWeather.curHumidity = (int)jsonObj["current"]["humidity"];        
+      const char* conditions = jsonObj["current"]["weather"][0]["main"];
+      strcpy(myWeather.conditions, conditions);
+      
+      #ifdef DRAWWEATHERICON
+        const char* iconPath = jsonObj["current"]["weather"][0]["icon"];
+        char path[100]="http://openweathermap.org/img/wn/";
+        // put it all together and stick it in myWeather.iconPath
+        strcat(path,iconPath); 
+        strcat(path,"@2x.png");
+        strcpy(myWeather.iconPath,path);
+        #ifdef DEBUG 
+          Serial.printf("getWeather constructed iconPath: %s\n",myWeather.iconPath);
+        #endif
+      #endif
+          
+      int todayLow  = jsonObj["daily"][0]["temp"]["min"]; 
+      myWeather.todayLow = todayLow;
+  
+      int todayHigh  = jsonObj["daily"][0]["temp"]["max"]; 
+      myWeather.todayHigh = todayHigh;
+  
+      int wind_spd = jsonObj["current"]["wind_speed"];
+      myWeather.wind_spd = wind_spd;
+  
+      int wind_deg = jsonObj["current"]["wind_deg"];
+      // map the wind_deg to text direction
+      char wind_dir[4];
+      if(wind_spd > 0)
+      {
+        if (wind_deg>337.5) strcpy(wind_dir,"n");
+        else if (wind_deg>292.5) strcpy(wind_dir,"nw");
+        else if(wind_deg>247.5) strcpy(wind_dir,"w");
+        else if(wind_deg>202.5) strcpy(wind_dir,"sw");
+        else if(wind_deg>157.5) strcpy(wind_dir,"s");
+        else if(wind_deg>122.5) strcpy(wind_dir,"se");
+        else if(wind_deg>67.5) strcpy(wind_dir,"e");
+        else if(wind_deg>22.5) strcpy(wind_dir,"ne");
+        else strcpy(wind_dir,"n");
+        strcpy(myWeather.wind_dir, wind_dir);
+      }
+      else
+        strcpy(myWeather.wind_dir,"mph");
+        
+      #ifdef DEBUG
+        Serial.println(payload);
+        Serial.println("Weather refreshed");
+      #endif
+    }
+    else if(!firstRun)
+    {
+      connectWifi(true);
+    }
+    tft.fillCircle(200,200,5,TFT_BLACK); // erase refresh indicator dot
+  #endif // end of #ifdef USEOPENWEATHERAPI
 }
 
 void displayWeather()
 {
   tft.fillScreen(TFT_BLACK);
   #ifdef DRAWWEATHERICON
-    setPngPosition(6,35);
+    #ifdef USEOPENWEATHERAPI
+      // position for 100x100 OpenWeather icons
+      setPngPosition(6,55);
+    #else
+      // position for 128x128 WeatherAPI.com icons
+      setPngPosition(6,35);
+    #endif
     load_png(myWeather.iconPath);
   #endif
   tft.setTextSize(1); 
