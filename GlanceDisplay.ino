@@ -1172,7 +1172,7 @@ void getWeatherOpenWeather(bool firstRun)
         strcat(path,"@2x.png");
         strcpy(myWeather.iconPath,path);
         #ifdef DEBUG 
-          Serial.printf("getWeather constructed iconPath: %s\n",myWeather.iconPath);
+          Serial.printf("getWeatherOpenWeather constructed iconPath: %s\n",myWeather.iconPath);
         #endif
       #endif
           
@@ -1418,7 +1418,7 @@ void displayTime(void)
   if(prevHour != hour())
   {
     prevHour = hour();
-    if(hour() >= displaySleepHour)
+    if(hour() >= displaySleepHour && hour() <= displayWakeHour)
     {
       // time for to sleep the display
       if(backlightOn)
