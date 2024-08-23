@@ -1,0 +1,36 @@
+Notes
+* DONE: remove "delay()" from the quote display. replace it with millis so it is non-blocking
+* DONE: get touch working. Tap to force a refresh of current view is the goal.  
+* DONE: Fix jaggie font for symbol and price (change looks OK)
+* DONE: Detect swipe left and swipe right. Adjust for screen rotation. 
+* DONE: Detect tap and long tap
+* DONE: Stocks: round price 2 digits   see https://github.com/Bodmer/TFT_eSPI/discussions/2039  tft.printf
+* DONE: arc graph of day hi/lo and current. 
+* DONE: adjust font size for expensive stocks (NVR and BRK-A are good tests)
+* DONE: introduce display "pages" 
+    with simple time/date first
+    weather being the next after that. 
+    Swipe either direction switches topic being displayed. 
+* DONE: replace String with char[] - stocks DONE, Time DONE, Weather DONE. (It's still in the JSON payload parsing)
+* DONE: color range for temp
+* DONE: Time page: long press to toggle 12/24 hr time with am/pm indicator
+* DONE: Time page: 3 letter month name
+* DONE: Get time from worldtimeapi.org rather than weather page
+* DONE: Auto update weather - every 16 mins seems good. 
+* DONE: more colors for clock (red, silver, sky blue, green, yellow, orange)
+* DONE: fallback wifi. Try main wifi 3 times, then fallback wifi 3 times, then back to main, etc. 
+* DONE: store settings in device flash (clock 12/24 and color to start with)  
+* DONE: if ZIP is empty in secrets.h, use public IP address to get weather 
+* DONE: Refresh time when the day changes to protect against drift
+* DONE: Delay clock color and mode writes to flash to reduce flash wear as user flips through settings
+* DONE: Auto rotate through pages when idle
+* DONE: stopwatch page. tap to start/stop. tap & hold to clear. shows mins:secs until one hour and then switches to hrs:mins:sec. Max of 99 hrs, 59 min, 59 sec then it just stops. Don't let page change when running.
+* DONE: BUG: stocks not autorefreshing on interval
+* DONE (I think): Make loss of connectivity after initial start up non-fatal. Just hold on to previous data until next refresh. But try to quietly connect wifi in this case. 
+* DONE: BUG: removed leftover time sync from the weather feed when weather would refresh, I know this time is not accurate and this is probably the root cause of the time drift. 
+* DONE: Added seconds to parseTime. Was assuming 0 before as "close enough" but being up to 59 sec off is annoying. 
+* 1. Scripts to manage changing displays for TFT_espi library  
+* 2. Better quotes API with 15 min delayed quotes when market is open
+* 3. next google calendar item on time/date 
+* STRETCH: split refresh onto a seperate ESP32 core
+

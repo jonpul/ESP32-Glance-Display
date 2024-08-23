@@ -1,44 +1,3 @@
-/*
-
- downloading images and displaying. maybe I can use this for weather icons https://www.youtube.com/watch?v=OXrJiHGQnQY
-TODO:
-* DONE: remove "delay()" from the quote display. replace it with millis so it is non-blocking
-* DONE: get touch working. Tap to force a refresh of current view is the goal.  
-* DONE: Fix jaggie font for symbol and price (change looks OK)
-* DONE: Detect swipe left and swipe right. Adjust for screen rotation. 
-* DONE: Detect tap and long tap
-* DONE: Stocks: round price 2 digits   see https://github.com/Bodmer/TFT_eSPI/discussions/2039  tft.printf
-* DONE: arc graph of day hi/lo and current. 
-* DONE: adjust font size for expensive stocks (NVR and BRK-A are good tests)
-* DONE: introduce display "pages" 
-    with simple time/date first
-    weather being the next after that. 
-    Swipe either direction switches topic being displayed. 
-* DONE: replace String with char[] - stocks DONE, Time DONE, Weather DONE. (It's still in the JSON payload parsing)
-* DONE: color range for temp
-* DONE: Time page: long press to toggle 12/24 hr time with am/pm indicator
-* DONE: Time page: 3 letter month name
-* DONE: Get time from worldtimeapi.org rather than weather page
-* DONE: Auto update weather - every 16 mins seems good. 
-* DONE: more colors for clock (red, silver, sky blue, green, yellow, orange)
-* DONE: fallback wifi. Try main wifi 3 times, then fallback wifi 3 times, then back to main, etc. 
-* DONE: store settings in device flash (clock 12/24 and color to start with)  
-* DONE: if ZIP is empty in secrets.h, use public IP address to get weather 
-* DONE: Refresh time when the day changes to protect against drift
-* DONE: Delay clock color and mode writes to flash to reduce flash wear as user flips through settings
-* DONE: Auto rotate through pages when idle
-* DONE: stopwatch page. tap to start/stop. tap & hold to clear. shows mins:secs until one hour and then switches to hrs:mins:sec. Max of 99 hrs, 59 min, 59 sec then it just stops. Don't let page change when running.
-* DONE: BUG: stocks not autorefreshing on interval
-* DONE (I think): Make loss of connectivity after initial start up non-fatal. Just hold on to previous data until next refresh. But try to quietly connect wifi in this case. 
-* DONE: BUG: removed leftover time sync from the weather feed when weather would refresh, I know this time is not accurate and this is probably the root cause of the time drift. 
-* DONE: Added seconds to parseTime. Was assuming 0 before as "close enough" but being up to 59 sec off is annoying. 
-* 1. Scripts to manage changing displays for TFT_espi library  
-* 2. Better quotes API with 15 min delayed quotes when market is open
-* 3. next google calendar item on time/date 
-* STRETCH: split refresh onto a seperate ESP32 core
- */
-
-
 #include <CST816S.h>      // touch
 #include <TFT_eSPI.h>     // display 
 #include <WiFi.h>         
@@ -101,6 +60,7 @@ int curPage = 0;
 bool pageJustChanged = true;
 
 // clock globals
+int prevHour = -1;
 int prevMinute = -1;
 int timeColors[] = {TFT_RED, TFT_SILVER, TFT_SKYBLUE, TFT_GREEN, TFT_YELLOW, TFT_ORANGE};    // available colors for clock page
 int maxColorIndex = (sizeof(timeColors) / sizeof(timeColors[0]))-1;
@@ -108,8 +68,8 @@ int curColorIndex = 0;
 bool time12HrMode = false;
 //int lastDayClockRefresh = 0;
 int lastDayClockRefresh = -1;
-int backlightOffHour = 1;  // the backlight sleep only works if the OFF hour is less than the ON hour. 
-int backlightOnHour = 6;
+int displaySleepHour = 1;  // the backlight sleep only works if the OFF hour is less than the ON hour. 
+int displayWakeHour = 7;
 bool backlightOn = false;
 
 // stopwatch globals
@@ -129,7 +89,7 @@ TickTwo secTimer(onTimer, 993, 0, MILLIS);  // 1000 ms was running slow over tim
 int lastPageDisplayMillis = millis();     // initialize page pause timer
 #define QUOTE_DISPLAY_MILLIS 5000         // how long to display a quote
 #define QUOTE_REFRESH_MILLIS 1080000        // interval for refreshing quotes 18 min = 1080000
-#define WEATHER_REFRESH_MILLIS 1800000     // interval for refreshing weather  30 min = 1800000
+#define WEATHER_REFRESH_MILLIS 3600000     // interval for refreshing weather  30 min = 1800000
 // delay writing prefs to flash until they haven't changed for the defined interval
 int flashWriteDelayStart = -1;            // if it is -1 that means it hasn't changed
 #define FLASH_WRITE_DELAY_MS 5000         // wait this ms after setting changes to write to flash (to reduce flash wear)
@@ -162,11 +122,16 @@ struct weather {
                   char conditions[100];
                   int wind_spd;
                   char wind_dir[10];
+                  double latitude;
+                  double longitude;
                   #ifdef DRAWWEATHERICON
                     char iconPath[150];
                   #endif
                 };
 weather myWeather;
+
+// experimentat see getRedditQuotes
+//char* redditQuotes[25];
 
 // display config and init
 TFT_eSPI tft = TFT_eSPI(240, 240); 
@@ -354,25 +319,25 @@ void loop()
       case 0: // clock, do nothing on tap
         if(!backlightOn)
         {
-          setBacklight(true);
+          setDisplayAwake(true);
         }
         break;
       case 1: // weather, do nothing on tap
         if(!backlightOn)
         {
-          setBacklight(true);
+          setDisplayAwake(true);
         }
         break;
       case 2: // stocks, do nothing on tap
         if(!backlightOn)
         {
-          setBacklight(true);
+          setDisplayAwake(true);
         }
         break;
       case 3: // stopwatch, toggle running or not
         if(!backlightOn)
         {
-          setBacklight(true);
+          setDisplayAwake(true);
         }
         else   // stopwatch is handled differently because it has a tap action already. In this case, if the backlight is off, we consume the tap to turn the light on. If the light is on, we use it as start/stop the stopwatch
         {
@@ -531,11 +496,8 @@ void loop()
       if(m > (WEATHER_REFRESH_MILLIS + lastWeatherRefreshMillis))
       {
         // don't waste refreh on weather if the screen is off, we'll refresh it when the screen turns on
-        if(backlightOn)
-        {
-          getWeather(false);
-          pageJustChanged = false;
-        }
+        getWeather(false);
+        pageJustChanged = false;
         lastWeatherRefreshMillis = millis();
 
       }
@@ -578,10 +540,7 @@ void loop()
       {
         if((m > (QUOTE_REFRESH_MILLIS + lastQuoteRefreshMillis)))
         {
-          if(backlightOn)
-          {
-            getQuotes(false);
-          }
+          getQuotes(false);
           lastQuoteRefreshMillis = millis();
         }
       }  
@@ -647,6 +606,15 @@ void dumpArrayToDebug()
 }
 void getQuotes(bool firstRun)
 { 
+  // don't bother if screen is asleep
+  if(!backlightOn)
+  {
+    #ifdef DEBUG
+      Serial.println("Skipping quotes update. Display is asleep.");
+    #endif
+    return;
+  }
+    
   #ifdef MEMCHECK
      Serial.printf("Start getQuotes: %d\n",esp_get_free_heap_size());
   #endif
@@ -863,6 +831,16 @@ void displayQuote (char* symbol, float price, float change, float dayhigh, float
 
 void getWeather(bool firstRun)
 { 
+  // don't bother if screen is asleep
+  if(!backlightOn)
+  {
+    #ifdef DEBUG
+      Serial.println("Skipping quotes update. Display is asleep.");
+    #endif
+    return;
+  }
+
+    
   // if we are using OpenWeather, jump to that and then exit out. 
   #ifdef USEOPENWEATHERAPI
     getWeatherOpenWeather(firstRun);
@@ -1012,6 +990,86 @@ void getWeather(bool firstRun)
   #endif // end of else clause of #ifdef USEOPENWEATHERAPI
 }
 
+void getWeatherLocation()
+{
+  // #ifdef USEOPENWEATHERAPI call this once in setup and hold on to the city, state, lat, long
+   
+  // with zip: https://api.weatherapi.com/v1/current.json?key=12f3edb599a84be7a98134631241307&q=78641
+  // without zip: https://api.weatherapi.com/v1/current.json?key=12f3edb599a84be7a98134631241307&q=auto:ip
+  // ["location"]["name"] = city
+  // ["location"]["region"] = state
+  // ["location"]["lat"] = lat
+  // ["location"]["long"] = long
+
+  #ifdef DEBUG
+    Serial.println("Getting location for weather");
+  #endif
+
+  JSONVar jsonObj = null;
+
+  if(WiFi.isConnected())
+  {
+    // Initialize the HTTPClient object
+    HTTPClient http;
+    
+    // Construct the URL using token from secrets.h  
+    //this is weatherapi.com one day forecast request, which also returns location and current conditions
+    // use zipcode if there is one, otherwise use public IP location 
+    String url = "";
+    if((String)(WEATHER_ZIP)!="")
+    {
+      url = "http://api.weatherapi.com/v1/current.json?key="+(String)WEATHER_TOKEN+"&q="+(String)WEATHER_ZIP;
+    }  
+    else
+    {
+      url = "http://api.weatherapi.com/v1/current.json?key="+(String)WEATHER_TOKEN+"&q=auto:ip";
+    }
+    // Make the HTTP GET request 
+    http.begin(url);
+    int httpCode = http.GET();
+
+    String payload = "";
+    // Check the return code
+    if (httpCode == HTTP_CODE_OK) {
+      // If the server responds with 200, return the payload
+      payload = http.getString();
+    } else if (httpCode == HTTP_CODE_UNAUTHORIZED) {
+      // If the server responds with 401, show an error message
+      #ifdef DEBUG
+        Serial.println(F("Couldn't get location."));
+        Serial.println(F("Weather API Key error."));
+        Serial.println(String(http.getString()));
+      #endif
+    } else {
+      // For any other HTTP response code, print it
+      #ifdef DEBUG
+        Serial.println(F("Couldn't get location."));
+        Serial.println(F("Received unexpected HTTP response:"));
+        Serial.println(httpCode);
+      #endif
+    }
+    // End the HTTP connection
+    http.end();
+
+    // Parse response
+    jsonObj = JSON.parse(payload);
+    // Read values
+    const char* city = jsonObj["location"]["name"];
+    strcpy(myWeather.city, city);
+
+    const char* state = jsonObj["location"]["region"];
+    strcpy(myWeather.state, state);
+
+    myWeather.latitude = (double)jsonObj["location"]["lat"];
+    myWeather.longitude = (double)jsonObj["location"]["lon"];
+    
+    #ifdef DEBUG
+      Serial.println(payload);
+      Serial.println("Weather location refreshed");
+    #endif
+  }
+}
+
 void getWeatherOpenWeather(bool firstRun)
 { 
   #ifdef USEOPENWEATHERAPI
@@ -1025,6 +1083,16 @@ void getWeatherOpenWeather(bool firstRun)
         Serial.println("NON-STARTUP: getting weather with OpenWeather");
       }
     #endif
+
+    // TODO: potential for endless loop here 
+    // I should try it a couple times and then fallback to hardcoded lat/long/city/state
+    while (strlen(myWeather.city)==0 && strlen(myWeather.state)==0)
+    {
+      #ifdef DEBUG
+        Serial.println("Attempting to get weather location");
+      #endif
+      getWeatherLocation();
+    }
   
     JSONVar jsonObj = null;
   
@@ -1037,8 +1105,11 @@ void getWeatherOpenWeather(bool firstRun)
       // Construct the URL using token from secrets.h  
       //this is OpenWeather API current forecast request, which also returns daily info and current conditions
       String url = "";
-      
-      url = "https://api.openweathermap.org/data/3.0/onecall?lat="+String(OPENWEATHER_LAT)+"&lon="+String(OPENWEATHER_LONG)+"&appid="+String(OPENWEATHER_TOKEN)+"&units=IMPERIAL&exclude=hourly,minutely,alerts";
+
+      // before adding getWeatherLocation
+      //url = "https://api.openweathermap.org/data/3.0/onecall?lat="+String(OPENWEATHER_LAT)+"&lon="+String(OPENWEATHER_LONG)+"&appid="+String(OPENWEATHER_TOKEN)+"&units=IMPERIAL&exclude=hourly,minutely,alerts";
+      // after getWeatherLocation
+      url = "https://api.openweathermap.org/data/3.0/onecall?lat="+String(myWeather.latitude)+"&lon="+String(myWeather.longitude)+"&appid="+String(OPENWEATHER_TOKEN)+"&units=IMPERIAL&exclude=hourly,minutely,alerts";
    
       // Make the HTTP GET request 
       http.begin(url);
@@ -1081,8 +1152,11 @@ void getWeatherOpenWeather(bool firstRun)
       jsonObj = JSON.parse(payload);
 
       // Read values
-      strcpy(myWeather.city, OPENWEATHER_CITY);
-      strcpy(myWeather.state, OPENWEATHER_REGION);
+      // before adding getWeatherLocation
+      //strcpy(myWeather.city, OPENWEATHER_CITY);
+      //strcpy(myWeather.state, OPENWEATHER_REGION);
+      // after getWeatherLocation
+      // nothing needed, city/state are already in myWeather
      
       myWeather.curTemp = (int)jsonObj["current"]["temp"];
   
@@ -1315,22 +1389,6 @@ void parseTime(const char* localTime)
 
   setTime(tHr,tMin,tSec,tDay,tMon,tYr);  
   lastDayClockRefresh = tDay;
-
-  // turn off backlight during sleep hours  
-  if(backlightOn && (tHr>=backlightOffHour && tHr <backlightOnHour))
-  {
-    #ifdef DEBUG
-      Serial.println("Turning off backlight");
-    #endif
-    setBacklight(false);
-  }
-  if(!backlightOn && tHr>=backlightOnHour)
-  {
-    #ifdef DEBUG
-      Serial.println("Turning on backlight");
-    #endif
-    setBacklight(true);
-  }
 }
 
 void displayTime(void)
@@ -1353,6 +1411,28 @@ void displayTime(void)
         preferences.putBool("Clock12HrMode", time12HrMode);
       }
       flashWriteDelayStart = -1; // reset the flag
+    }
+  }
+
+  // when the hour changes check if we should sleep or wake up the display (which only happens on the hour
+  if(prevHour != hour())
+  {
+    prevHour = hour();
+    if(hour() >= displaySleepHour)
+    {
+      // time for to sleep the display
+      if(backlightOn)
+      {
+        setDisplayAwake(false);
+      }
+    }
+    else if(hour() >= displayWakeHour)
+    {
+      // time to wake up the display
+      if(!backlightOn)
+      {
+        setDisplayAwake(true);
+      }
     }
   }
 
@@ -1454,6 +1534,16 @@ void displayTime(void)
 
 void getTime(bool firstRun)
 {
+  // don't bother if screen is asleep
+  if(!backlightOn)
+  {
+    #ifdef DEBUG
+      Serial.println("Skipping quotes update. Display is asleep.");
+    #endif
+    return;
+  }
+
+    
   #ifdef DEBUG
     if(firstRun)
     {
@@ -1738,8 +1828,9 @@ int string_contains(char *string, char *substring){
 
 }
 
-void setBacklight(bool setBacklightOn)
+void setDisplayAwake(bool setBacklightOn)
 {
+  backlightOn = setBacklightOn;
   if(setBacklightOn)
   {
     digitalWrite(BACKLIGHT_PIN, HIGH);
@@ -1751,6 +1842,8 @@ void setBacklight(bool setBacklightOn)
     lastWeatherRefreshMillis = millis();
     getQuotes(false);
     lastQuoteRefreshMillis = millis();
+    getTime(false);
+    pageJustChanged = true;
   }
   else
   {
@@ -1759,5 +1852,78 @@ void setBacklight(bool setBacklightOn)
       Serial.printf("Backlight off at %d:%d:%d\n",hour(),minute(),second());
     #endif
   }
-  backlightOn = setBacklightOn;
+}
+
+/// *** Experiemental - not called from anywhere right now
+// havent't been able to get this URL to return anything on the device. works from desktop of course. Tried http and https in URL 
+void getRedditQuotes(bool firstRun)
+{
+  #ifdef DEBUG
+    if(firstRun)
+    {
+      Serial.println("STARTUP: getting reddit quotes");
+    }
+    else
+    {
+      Serial.println("NON-STARTUP: getting reddit quotes");
+    }
+  #endif
+  if(WiFi.isConnected())
+  {
+    JSONVar jsonObj = null;
+
+    // Initialize the HTTPClient object
+    HTTPClient http;
+    tft.fillCircle(200,200,5,TFT_BLUE); // draw refresh indicator dot
+    
+    String url = "https://www.reddit.com/r/quotes.json";
+    //String url = "https://www.reddit.com/user/gms_fan.json";
+    // Make the HTTP GET request 
+    http.begin(url);
+    int httpCode = http.GET();
+
+    String payload = "";
+    // Check the return code
+    if (httpCode == HTTP_CODE_OK) {
+      // If the server responds with 200, return the payload
+      payload = http.getString();
+    } 
+    else 
+    {
+      // For any other HTTP response code, print it
+      #ifdef DEBUG
+        Serial.println(F("Received unexpected HTTP response:"));
+        Serial.println(httpCode);
+      #endif
+      tft.fillScreen(TFT_RED);
+      tft.setTextSize(1); 
+      tft.setTextColor(TFT_WHITE);
+      tft.drawString("Reddit Quote Service Error", tft.width()/2, 100,4);
+      delay(1000);
+      tft.fillScreen(TFT_BLACK);
+      return;
+    }
+    // End the HTTP connection
+    http.end();
+
+    // Parse response
+    jsonObj = JSON.parse(payload);
+    Serial.println(url);
+    Serial.println(payload);
+    Serial.println( jsonObj["data"]["children"][1]["data"]["title"]); 
+//    for(int i=1;i<26;i++)
+//    {
+//      String rq = (String)jsonObj["data"]["children"][i]["data"]["title"];
+//      strcpy(redditQuotes[i],rq.c_str());
+//      Serial.printf("%d %s\n",i, redditQuotes[i]);      
+//    }
+    #ifdef DEBUG
+      Serial.println("reddit quotes refreshed");
+    #endif
+  }
+  else if(!firstRun)
+  {
+    connectWifi(true);
+  }
+    tft.fillCircle(200,200,5,TFT_BLACK); // erase refresh indicator dot
 }
